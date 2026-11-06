@@ -60,6 +60,10 @@ lib/firebase_options.dart
 *.secret
 secrets/
 
+# Python virtualenvs (build scripts / local tooling)
+venv/
+.venv/
+
 # iOS
 /ios/Pods/
 /ios/.symlinks/

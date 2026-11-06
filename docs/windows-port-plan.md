@@ -193,9 +193,16 @@ The current engine lives in `local_plugins/llama_flutter_android/android/src/mai
    - `llama_host_io.dart` returns `LlamaHostPigeon()` on Android/iOS and `LlamaHostFfi()` on Windows.
 2. Change `LlamaController` to use `createLlamaHost()` instead of `LlamaHostApi()`. Keep `LlamaFlutterApi` registration for Android/iOS; the FFI host invokes `onToken` / `onDone` / `onError` / `onLoadProgress` directly.
 3. Implement `LlamaHostFfi`:
-   - `loadModel`: convert `ModelConfig` to the C ABI; bridge progress with `NativeCallable.listener`.
-   - `generate`: build a prompt, call `plm_generate`, stream tokens through a `NativeCallable.listener`, complete on done/error.
+   - `loadModel`: convert `ModelConfig` to the C ABI; bridge progress with `NativeCallable`.
+   - `generate`: build a prompt, call `plm_generate`, stream tokens through a `NativeCallable`, complete on done/error.
+   - **Implementation note:** the blocking calls run in short-lived worker isolates with
+     `NativeCallable.isolateLocal`, not `NativeCallable.listener` on the UI isolate. Tokens are
+     copied to Dart inside the native callback (the `char*` is only valid during the call) and
+     forwarded over a `SendPort`. `stop()` still calls `plm_stop` directly from the UI isolate.
+     Late tokens/done from a stopped run are suppressed, matching Android's `isStopping` behavior.
    - `generateChat`: format the messages in Dart and call `generate`. **Do not port `ChatTemplates.kt` to C++.**
+     The Dart port lives in `lib/src/chat_templates.dart` (bug-for-bug, including the literal
+     `"\n"` sequences in the Alpaca/Vicuna/Phi templates).
    - `stop`, `dispose`, `isModelLoaded`, `getContextInfo`, `clearContext`, `setSystemPromptLength`, `registerCustomTemplate`, `unregisterCustomTemplate`, `detectGpu`.
 4. Extract the prompt builders from `lib/services/inference_android.dart` (`_buildPrompt`, `_buildChatML`, `_buildGemma`, `_buildLlama3`, and the message conversion) into a shared `lib/services/chat_prompt_builder.dart`. Both the Android engine and the Windows host use it, so templates do not drift.
 5. Update `lib/services/inference_android.dart`:
@@ -207,9 +214,12 @@ The current engine lives in `local_plugins/llama_flutter_android/android/src/mai
 6. `lib/services/inference_service.dart`:
    - Replace `modelPath.split('/').last` with `p.basename(modelPath)`.
    - Keep the existing conditional import (`inference_android.dart` for IO, `inference_stub.dart` for web).
-7. Vision (Phase 2b, optional):
-   - Port the mtmd load/generate path to the core and C ABI.
-   - If not done, `plm_load_model` returns `VISION_LOAD_FAILED: ...` when `mmproj` is set, and text still works. This matches the existing contract in `LlamaController.loadModel`.
+7. Vision (Phase 2b, done):
+   - `plm_generate` takes an extra `const char* image_path`; the core already had the mtmd
+     load/generate path, so this is the only ABI change.
+   - `plm_load_model` returns `PLM_ERROR_VISION_FAILED` (with `plm_last_error`) when `mmproj` is
+     set but unusable; text still works. This matches the existing contract in
+     `LlamaController.loadModel`.
 
 **Verify:**
 - Windows chat streams tokens with a small GGUF.
