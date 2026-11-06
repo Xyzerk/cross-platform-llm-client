@@ -1,13 +1,14 @@
 # Building PrivateLM for Windows
 
-Phases 0–4 are done: the runner, window sizing, the FFI plugin target, the
+Phases 0–5 are done: the runner, window sizing, the FFI plugin target, the
 build script, the real engine — `llama_flutter_android.dll` embeds a static
 llama.cpp (CPU + RPC + mtmd, the same tree the Android build compiles) — the
-Dart Windows inference host, the cluster transport abstraction, and
+Dart Windows inference host, the cluster transport abstraction,
 `privatelm_rpc_worker.exe`, which lets an Android/iOS master use this PC as a
-cluster worker. Standalone Windows chat with a GGUF model works through the C
-ABI in `local_plugins/llama_flutter_android/windows/include/llama_ffi.h`.
-Windows as a cluster *master* (using phone workers) is Phase 5. See
+cluster worker, and the master side, which spreads a model across phone
+workers. Standalone Windows chat with a GGUF model works through the C ABI in
+`local_plugins/llama_flutter_android/windows/include/llama_ffi.h`. Vulkan/GPU
+inference (Phase 2c) is the remaining item. See
 [windows-port-plan.md](windows-port-plan.md) for the full roadmap.
 
 ## Prerequisites
@@ -294,9 +295,29 @@ the monitor work area so its frame never lands off-screen on small displays.
   and checks that a port already in use is reported. It skips when the Windows
   app has not been built.
 
+## What Phase 5 includes
+
+- A Windows PC can be the master: `WindowsClusterBackend` plans the load
+  through the same `plm_set_cluster` / `plm_load_model` path Android uses, so
+  the layer count, weights, `tensor_split`, the output-layer override and
+  `op_offload = false` match the phone implementation exactly (both call
+  `plm::planCluster`).
+- Every worker is probed before the plan reaches llama.cpp, because
+  `ggml_backend_rpc_add_server` can abort the process on an unreachable peer.
+- `discover` browses `_privatelm._tcp.local` (PTR → SRV → A → TXT) and skips
+  entries whose `v` is not `rpc7`; `ClusterService.relocateWorkers` matches
+  saved workers by their stable ID after an IP change.
+- `lastLoadBuffers` feeds `ClusterService.refreshSplit`, so the split card
+  shows this PC's share and each worker's share (RPC buffers are named
+  `RPC0[host:port]`).
+- The Windows worker's status file reports the master's address too: the RPC
+  transport patch used to log client addresses only on non-Windows builds.
+- `test/windows_master_test.dart` starts the real worker, plans a load onto it
+  and checks that llama.cpp's RPC client connects, using a metadata-only GGUF
+  stub so no model file is needed. It skips when the app has not been built.
+
 ## What is not here yet
 
-- Windows master with phone workers (Phase 5)
 - Vulkan/GPU inference on Windows (Phase 2c)
 
 ## What Phase 0 includes

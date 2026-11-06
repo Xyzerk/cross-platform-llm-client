@@ -28,10 +28,15 @@ import 'hive_service.dart';
 /// Windows: runs this PC as a cluster worker, and can plan a load across
 /// workers the way the Android backend does.
 class WindowsClusterBackend implements ClusterBackend {
-  WindowsClusterBackend({String? workerExe}) : _workerExeOverride = workerExe;
+  WindowsClusterBackend({String? workerExe, String? dllPath})
+      : _workerExeOverride = workerExe,
+        _dllPathOverride = dllPath;
 
   /// Test/developer override for the worker binary.
   final String? _workerExeOverride;
+
+  /// Test/developer override for the plugin DLL the master path calls.
+  final String? _dllPathOverride;
 
   static const _exeName = 'privatelm_rpc_worker.exe';
   static const _dllName = 'llama_flutter_android.dll';
@@ -499,7 +504,7 @@ class WindowsClusterBackend implements ClusterBackend {
   // ── Native helpers ─────────────────────────────────────────────────────
 
   _Engine? _engineInstance;
-  _Engine get _engine => _engineInstance ??= _Engine.open();
+  _Engine get _engine => _engineInstance ??= _Engine.open(_dllPathOverride);
 
   _Kernel32? _kernel32Instance;
   _Kernel32? get _kernel32 {
@@ -572,10 +577,12 @@ class _WorkerFile {
 class _Engine {
   _Engine(this._library);
 
-  factory _Engine.open() {
-    final override = Platform.environment['PRIVATELM_TEST_DLL'];
-    if (override != null && override.isNotEmpty) {
-      return _Engine(DynamicLibrary.open(override));
+  factory _Engine.open(String? override) {
+    final path = (override != null && override.isNotEmpty)
+        ? override
+        : Platform.environment['PRIVATELM_TEST_DLL'];
+    if (path != null && path.isNotEmpty) {
+      return _Engine(DynamicLibrary.open(path));
     }
     final exeDir = File(Platform.resolvedExecutable).parent.path;
     final bundled = p.join(exeDir, WindowsClusterBackend._dllName);

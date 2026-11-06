@@ -455,7 +455,10 @@ class _SplitCard extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('Loaded model', style: t.bodyStrong),
         const SizedBox(height: 2),
-        Text('Running on ${shares.length} phones · ${_gb(total)}', style: t.caption),
+        Text(
+            'Running on ${shares.length} '
+            '${ClusterService.isDesktop ? 'devices' : 'phones'} · ${_gb(total)}',
+            style: t.caption),
         const SizedBox(height: 14),
         ClipRRect(
           borderRadius: BorderRadius.circular(6),
@@ -482,7 +485,10 @@ class _SplitCard extends StatelessWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  shares[i].isThisPhone ? '${shares[i].name} (this phone)' : shares[i].name,
+                  shares[i].isThisPhone
+                      ? '${shares[i].name} '
+                          '(${ClusterService.isDesktop ? 'this PC' : 'this phone'})'
+                      : shares[i].name,
                   style: t.body,
                 ),
               ),

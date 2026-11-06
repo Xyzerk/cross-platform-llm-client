@@ -609,11 +609,11 @@ class ClusterService extends GetxService {
     if (context == null) return false;
     final share = await showAppSheet<bool>(
       context,
-      title: 'This model fits on this phone',
+      title: 'This model fits on this device',
       subtitle: '${model.replaceAll(RegExp(r'\.gguf$'), '')} needs about '
-          '${_gb(modelMb)}, and this phone has room for it. Running it here '
+          '${_gb(modelMb)}, and this device has room for it. Running it here '
           'is faster, because sharing sends every word over Wi-Fi. Share it '
-          'to free up memory on this phone.',
+          'to free up memory on this device.',
       builder: (ctx) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -651,8 +651,12 @@ class ClusterService extends GetxService {
     final fileMb = await File(modelPath).length() / (1024 * 1024);
     final remoteMb = remote.values.fold<double>(0, (a, b) => a + b);
     split.assignAll([
-      ClusterShare(deviceName.isEmpty ? 'This phone' : deviceName,
-          math.max(0, fileMb - remoteMb), isThisPhone: true),
+      ClusterShare(
+          deviceName.isEmpty
+              ? (ClusterService.isDesktop ? 'This PC' : 'This phone')
+              : deviceName,
+          math.max(0, fileMb - remoteMb),
+          isThisPhone: true),
       for (final e in remote.entries) ClusterShare(e.key, e.value),
     ]);
   }
