@@ -1,12 +1,13 @@
 # Building PrivateLM for Windows
 
-Phases 0–2 are done: the runner, window sizing, the FFI plugin target, the
+Phases 0–4 are done: the runner, window sizing, the FFI plugin target, the
 build script, the real engine — `llama_flutter_android.dll` embeds a static
-llama.cpp (CPU + RPC + mtmd, the same tree the Android build compiles) — and
-the Dart Windows inference host. Standalone Windows chat with a GGUF model now
-works through the C ABI in
-`local_plugins/llama_flutter_android/windows/include/llama_ffi.h`. The cluster
-worker and master land in later phases. See
+llama.cpp (CPU + RPC + mtmd, the same tree the Android build compiles) — the
+Dart Windows inference host, the cluster transport abstraction, and
+`privatelm_rpc_worker.exe`, which lets an Android/iOS master use this PC as a
+cluster worker. Standalone Windows chat with a GGUF model works through the C
+ABI in `local_plugins/llama_flutter_android/windows/include/llama_ffi.h`.
+Windows as a cluster *master* (using phone workers) is Phase 5. See
 [windows-port-plan.md](windows-port-plan.md) for the full roadmap.
 
 ## Prerequisites
@@ -251,10 +252,51 @@ the monitor work area so its frame never lands off-screen on small displays.
 - `test/chat_templates_test.dart` covers prompt parity with the Kotlin
   formatter.
 
+## What Phase 3 and 4 include
+
+- `lib/services/cluster_backend.dart` is the only cluster API the app uses.
+  Its conditional import picks `cluster_backend_io.dart` (`LlamaClusterBackend`
+  on Android/iOS, `WindowsClusterBackend` on Windows) or
+  `cluster_backend_stub.dart` on web. `ClusterBackend.instance` is a
+  per-process singleton, because the Windows backend owns a child process.
+- `lib/services/cluster_windows_backend.dart`:
+  - starts `privatelm_rpc_worker.exe` detached with `--parent-pid`, `--id`,
+    `--model`, `--advertise-ip` and a status-file path;
+  - reads `%LOCALAPPDATA%\PrivateLM\cluster\worker.json` (rewritten every
+    second) for `workerStatus()`, and treats a file older than 6 s as a dead
+    worker;
+  - puts the worker in a Windows Job Object with
+    `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` via `dart:ffi`, so closing PrivateLM
+    stops the worker even if it is killed from Task Manager;
+  - keeps the machine awake with `SetThreadExecutionState`;
+  - plans loads through the plugin DLL (`plm_free_ram_mb`,
+    `plm_benchmark_bandwidth`, `plm_set_cluster`, `plm_last_load_buffers`);
+  - browses `_privatelm._tcp.local` with `multicast_dns` for "Find nearby".
+- `local_plugins/llama_flutter_android/windows/rpc_worker/`:
+  - `main.cpp` — arg parsing, CPU/RPC backend lookup, a pre-bind check so port
+    conflicts surface the real Winsock message, Ctrl+C handling, a
+    `--parent-pid` watchdog, and the 1 s status loop.
+  - `status_writer.cpp` — atomic JSON status (temp file + replace).
+  - `mdns_advertiser.cpp` — best-effort DNS-SD registration via
+    `DnsServiceRegister` (no extra responder to ship).
+  - The CMake target links the same static llama.cpp as the DLL, so the RPC
+    protocol version (`rpc7`) matches every Android/iOS worker, and Flutter
+    copies the exe next to `privatelm.exe`.
+- Cluster UI on Windows: Master/Worker roles, a network-interface picker
+  (persisted as `cluster_interface`), "Paste a worker link" instead of the
+  camera scanner, a firewall warning with an "Allow through Windows Firewall"
+  button (one UAC prompt), and a QR code plus `IP:port` for the master to scan
+  or type.
+- `plm::loadRpcBackendLocked()` now accepts a statically linked RPC backend
+  before trying to load `libggml-rpc.so`, so a Windows master can use RPC
+  workers without a separately shipped backend library.
+- `test/windows_worker_test.dart` starts the real exe, checks the status file,
+  and checks that a port already in use is reported. It skips when the Windows
+  app has not been built.
+
 ## What is not here yet
 
-- `privatelm_rpc_worker.exe` (Phase 4)
-- Windows master/worker cluster support (Phases 3–5)
+- Windows master with phone workers (Phase 5)
 - Vulkan/GPU inference on Windows (Phase 2c)
 
 ## What Phase 0 includes
@@ -273,8 +315,13 @@ ABI in Phase 1.
 ## Cluster firewall note
 
 Cluster mode uses TCP port `50052` and mDNS (UDP `5353`). Windows Firewall must
-allow both on a **private** network profile. The cluster UI will surface this in
-Phase 4; until then, allow the app manually when testing.
+allow both on a **private** network profile. The cluster screen checks for the
+`PrivateLM Cluster` rule and offers an "Allow through Windows Firewall" button
+(one UAC prompt) that adds the TCP rule; allow mDNS/UDP 5353 by hand if
+"Find nearby" should work too. Manual IP pairing needs only the TCP rule.
+
+If the port cannot be bound, the worker's status file carries the Winsock
+message and the cluster screen shows it verbatim instead of a generic failure.
 
 The ggml RPC protocol has no authentication. Only run workers on a trusted
 private LAN.

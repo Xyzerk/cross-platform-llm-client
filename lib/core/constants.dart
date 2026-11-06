@@ -66,6 +66,12 @@ class AppConstants {
   static const String keyServerAllowNetwork = 'server_allow_network';
   static const String keyClusterEnabled = 'cluster_enabled';
   static const String keyClusterWorkers = 'cluster_workers';
+
+  /// Which network interface to advertise (a multi-NIC PC can pick one).
+  static const String keyClusterInterface = 'cluster_interface';
+
+  /// This device's lasting worker ID, so a master finds it after an IP change.
+  static const String keyClusterWorkerId = 'cluster_worker_id';
   static const String keyImageSteps = 'image_steps';
   static const String keyImageGenForceCpu = 'image_gen_force_cpu';
   static const String keyImageGenBackend = 'image_gen_backend';

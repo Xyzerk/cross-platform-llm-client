@@ -3,7 +3,8 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:get/get.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 // import 'firebase_options.dart';
@@ -54,8 +55,9 @@ void main() {
       appLog.error('[Firebase] Initialization failed', details: e);
     }
 
-    // Support phones and tablets in portrait or landscape.
-    if (!kIsWeb) {
+    // Support phones and tablets in portrait or landscape. Desktops have no
+    // orientation to lock.
+    if (!kIsWeb && defaultTargetPlatform != TargetPlatform.windows) {
       await SystemChrome.setPreferredOrientations([
         DeviceOrientation.portraitUp,
         DeviceOrientation.landscapeLeft,

@@ -56,14 +56,22 @@ int readBlockCount(const char* model_path) {
 }
 
 ggml_backend_reg_t loadRpcBackendLocked() {
-    if (!g_rpc_backend_loaded) {
-        const std::string path = g_lib_dir + "/libggml-rpc.so";
-        if (!ggml_backend_load(path.c_str())) {
-            return nullptr;
-        }
+    if (g_rpc_backend_loaded) return ggml_backend_reg_by_name("RPC");
+
+    // Windows (and any static GGML_RPC build) registers the RPC backend at
+    // startup, so it is already there. Android ships it as a separate
+    // libggml-rpc.so next to the app and loads it on first use.
+    if (ggml_backend_reg_t built_in = ggml_backend_reg_by_name("RPC")) {
         g_rpc_backend_loaded = true;
+        return built_in;
     }
-    return ggml_backend_reg_by_name("RPC");
+    if (!g_lib_dir.empty()) {
+        const std::string path = g_lib_dir + "/libggml-rpc.so";
+        if (ggml_backend_load(path.c_str())) {
+            g_rpc_backend_loaded = true;
+        }
+    }
+    return g_rpc_backend_loaded ? ggml_backend_reg_by_name("RPC") : nullptr;
 }
 
 std::string planCluster(const char* model_path, ClusterPlan& plan) {

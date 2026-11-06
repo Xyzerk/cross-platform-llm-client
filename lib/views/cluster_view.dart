@@ -2,11 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:llama_flutter_android/llama_flutter_android.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../core/ui.dart';
+import '../services/cluster_backend.dart';
 import '../services/cluster_service.dart';
 
 /// Phone cluster: pick Master (runs the model) or Worker (lends this phone),
@@ -44,7 +44,11 @@ class _ClusterViewState extends State<ClusterView> {
     final t = AppTokens.of(context);
     return Scaffold(
       backgroundColor: t.bg,
-      appBar: appScreenBar(context, title: 'Phone cluster', showBack: true),
+      appBar: appScreenBar(
+          context,
+          title: ClusterService.isDesktop ? 'Device cluster' : 'Phone cluster',
+          showBack: true),
+
       body: Obx(() {
         final role = cluster.role;
         return ListView(
@@ -63,10 +67,15 @@ class _ClusterViewState extends State<ClusterView> {
             const SizedBox(height: 16),
             if (role != ClusterRole.off && cluster.wifiAddress.value == null) ...[
               AppNotice(
-                'Turn on Wi-Fi. All phones in the cluster must be on the same Wi-Fi network.',
+                'Turn on Wi-Fi. All devices in the cluster must be on the same '
+                'network.',
                 icon: Icons.wifi_off_rounded,
                 color: t.orange,
               ),
+              const SizedBox(height: 16),
+            ],
+            if (cluster.interfaces.length > 1) ...[
+              _interfacePicker(context),
               const SizedBox(height: 16),
             ],
             ...switch (role) {
@@ -83,16 +92,54 @@ class _ClusterViewState extends State<ClusterView> {
   List<Widget> _offSection() => [
         AppNotice(
           ClusterService.canBeMaster
-              ? 'Run models too big for one phone by sharing the work across '
-                  'phones on the same Wi-Fi.\n\n'
-                  'Master: the phone you chat on. It runs the model.\n'
-                  'Worker: a phone that lends its memory to the master.'
+              ? 'Run models too big for one device by sharing the work across '
+                  'devices on the same Wi-Fi or LAN.\n\n'
+                  'Master: the device you chat on. It runs the model.\n'
+                  'Worker: a phone or PC that lends its memory to the master.'
               : 'Help an Android phone running PrivateLM run models too big for '
                   'it alone: choose Worker, then scan this device\'s QR code '
                   'from that phone.',
           icon: Icons.hub_outlined,
         ),
       ];
+
+  Widget _interfacePicker(BuildContext context) {
+    final t = AppTokens.of(context);
+    final address = cluster.wifiAddress.value;
+    final name = cluster.interfaces
+            .firstWhereOrNull((i) => i.address == address)
+            ?.name ??
+        'Network';
+    return Row(children: [
+      Icon(Icons.lan_rounded, size: 18, color: t.muted),
+      const SizedBox(width: 8),
+      Expanded(child: Text('$name · $address', style: t.caption)),
+      PillButton(label: 'Change', onPressed: () => _chooseInterface(context)),
+    ]);
+  }
+
+  Future<void> _chooseInterface(BuildContext context) async {
+    final address = await showAppSheet<String>(
+      context,
+      title: 'Cluster network',
+      subtitle: 'Pick the network the other devices can reach.',
+      builder: (ctx) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final interface in cluster.interfaces)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: PillButton(
+                label: '${interface.name} · ${interface.address}',
+                primary: interface.address == cluster.wifiAddress.value,
+                onPressed: () => Navigator.pop(ctx, interface.address),
+              ),
+            ),
+        ],
+      ),
+    );
+    if (address != null) await cluster.setInterface(address);
+  }
 
   // ── Worker ─────────────────────────────────────────────────────────────
 
@@ -130,7 +177,13 @@ class _ClusterViewState extends State<ClusterView> {
       body = _centered(context, [
         const SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 2.5)),
         const SizedBox(height: 16),
-        Text(s.running ? 'Waiting for Wi-Fi…' : 'Measuring this phone…', style: t.caption),
+        Text(
+            s.running
+                ? 'Waiting for a network address…'
+                : ClusterService.isDesktop
+                    ? 'Starting the worker…'
+                    : 'Measuring this phone…',
+            style: t.caption),
       ]);
     } else {
       body = _centered(context, [
@@ -143,12 +196,19 @@ class _ClusterViewState extends State<ClusterView> {
           child: QrImageView(data: qr, size: 220, padding: EdgeInsets.zero),
         ),
         const SizedBox(height: 16),
-        Text('Scan this from the master phone', style: t.bodyStrong),
+        Text(
+            ClusterService.isDesktop
+                ? 'Scan this from the master, or enter this address there'
+                : 'Scan this from the master phone',
+            style: t.bodyStrong,
+            textAlign: TextAlign.center),
         const SizedBox(height: 6),
         Row(mainAxisSize: MainAxisSize.min, children: [
           StatusDot(t.green, size: 8),
           const SizedBox(width: 6),
-          Text('Ready · ${cluster.wifiAddress.value}', style: t.caption),
+          SelectableText(
+              'Ready · ${cluster.wifiAddress.value}:${ClusterBackend.defaultPort}',
+              style: t.caption),
         ]),
         const SizedBox(height: 16),
         Row(children: [
@@ -159,6 +219,24 @@ class _ClusterViewState extends State<ClusterView> {
     }
 
     return [
+      if (cluster.firewallReady.value == false) ...[
+        AppNotice(
+          'Windows Firewall may be blocking other devices. Allow PrivateLM '
+          'through the firewall, or the master won\'t be able to connect.',
+          icon: Icons.shield_outlined,
+          color: t.orange,
+        ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: PillButton(
+            label: 'Allow through Windows Firewall',
+            primary: true,
+            onPressed: cluster.allowFirewall,
+          ),
+        ),
+        const SizedBox(height: 16),
+      ],
       if (s.throttled) ...[
         AppNotice(
           'Android is slowing this worker down (slow cores only), which slows '
@@ -168,12 +246,12 @@ class _ClusterViewState extends State<ClusterView> {
           color: t.orange,
         ),
         const SizedBox(height: 8),
-        const Align(
+        Align(
           alignment: Alignment.centerLeft,
           child: PillButton(
             label: 'Set Unrestricted',
             primary: true,
-            onPressed: LlamaCluster.requestBatteryUnrestricted,
+            onPressed: _allowBattery,
           ),
         ),
         const SizedBox(height: 16),
@@ -182,11 +260,19 @@ class _ClusterViewState extends State<ClusterView> {
       SectionFootnote(ClusterService.workerStopsWithApp
           ? 'Keep this device plugged in, on the same Wi-Fi, with PrivateLM open: '
               'iOS pauses apps in the background. Close PrivateLM to stop sharing.'
-          : 'Keep this phone plugged in and on the same Wi-Fi, with PrivateLM '
-              'open: the screen stays on while sharing, because Android slows '
-              'background work. Set Phone cluster to Off to stop.'),
+          : ClusterService.isDesktop
+              ? 'Keep this PC plugged in and on the same network. PrivateLM '
+                  'starts a small background process for the worker and stops '
+                  'it when you turn Worker off or close the app. If the master '
+                  'can\'t connect, allow PrivateLM through Windows Firewall.'
+              : 'Keep this phone plugged in and on the same Wi-Fi, with PrivateLM '
+                  'open: the screen stays on while sharing, because Android slows '
+                  'background work. Set Phone cluster to Off to stop.'),
     ];
   }
+
+  Future<void> _allowBattery() =>
+      ClusterBackend.instance.requestBatteryUnrestricted();
 
   Widget _centered(BuildContext context, List<Widget> children) =>
       Column(crossAxisAlignment: CrossAxisAlignment.center, children: children);
@@ -200,19 +286,29 @@ class _ClusterViewState extends State<ClusterView> {
         _SplitCard(shares: cluster.split),
         const SizedBox(height: 16),
       ],
-      PrimaryButton(
-        label: 'Scan a worker\'s QR code',
-        icon: Icons.qr_code_scanner_rounded,
-        onPressed: _scanQr,
-      ),
+      if (ClusterService.canScanQr)
+        PrimaryButton(
+          label: 'Scan a worker\'s QR code',
+          icon: Icons.qr_code_scanner_rounded,
+          onPressed: _scanQr,
+        )
+      else
+        PrimaryButton(
+          label: 'Paste a worker link',
+          icon: Icons.link_rounded,
+          onPressed: () => _pasteLink(context),
+        ),
       SectionHeader('Workers (${cluster.workers.length})'),
       if (cluster.workers.isEmpty)
-        const AppGroup(children: [
+        AppGroup(children: [
           EmptyState(
             icon: Icons.devices_other_rounded,
             title: 'No workers yet',
-            message: 'On each other phone, open Phone cluster, choose Worker, '
-                'then scan the QR code it shows.',
+            message: ClusterService.isDesktop
+                ? 'On the other device, open the cluster screen, choose Worker, '
+                    'then enter the IP and port it shows here.'
+                : 'On each other device, open Phone cluster, choose Worker, '
+                    'then scan the QR code it shows.',
           ),
         ])
       else
@@ -235,9 +331,9 @@ class _ClusterViewState extends State<ClusterView> {
         ]),
       const SectionFootnote(
         'Used the next time you load a GGUF model. If the model fits on this '
-        'phone you can keep it here, which is faster. If it doesn\'t, the '
-        'fastest phones get the biggest share and phones that aren\'t needed '
-        'are left out.',
+        'device you can keep it here, which is faster. If it doesn\'t, the '
+        'fastest devices get the biggest share and the ones that aren\'t '
+        'needed are left out.',
       ),
       const SectionHeader('Other ways to add'),
       Row(children: [
@@ -277,6 +373,35 @@ class _ClusterViewState extends State<ClusterView> {
     if (code != null) await _report(cluster.addFromQr(code));
   }
 
+  /// Desktop has no camera: the worker's link can be copied from its screen
+  /// and pasted here (it carries the IP, port and worker ID).
+  Future<void> _pasteLink(BuildContext context) async {
+    final ctrl = TextEditingController();
+    final link = await showAppSheet<String>(
+      context,
+      title: 'Paste a worker link',
+      subtitle: 'Shown on the other device under its QR code',
+      builder: (ctx) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            minLines: 1,
+            maxLines: 3,
+            keyboardType: TextInputType.url,
+            decoration: appInputDecoration(ctx, hint: 'privatelm://worker?host=…'),
+            onSubmitted: (v) => Navigator.pop(ctx, v),
+          ),
+          const SizedBox(height: 16),
+          PrimaryButton(label: 'Add', onPressed: () => Navigator.pop(ctx, ctrl.text)),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (link != null) await _report(cluster.addFromQr(link));
+  }
+
   Future<void> _enterIp(BuildContext context) async {
     final ctrl = TextEditingController();
     final input = await showAppSheet<String>(
@@ -291,7 +416,7 @@ class _ClusterViewState extends State<ClusterView> {
             autofocus: true,
             keyboardType: TextInputType.url,
             decoration: appInputDecoration(ctx,
-                hint: '192.168.1.20:${LlamaCluster.defaultPort}'),
+                hint: '192.168.1.20:${ClusterBackend.defaultPort}'),
             onSubmitted: (v) => Navigator.pop(ctx, v),
           ),
           const SizedBox(height: 16),

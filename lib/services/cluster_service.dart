@@ -8,10 +8,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:llama_flutter_android/llama_flutter_android.dart';
+import 'package:path/path.dart' as p;
 
 import '../core/constants.dart';
 import '../core/ui.dart';
 import 'app_log_service.dart';
+import 'cluster_backend.dart';
 import 'hive_service.dart';
 
 /// What this phone does in a phone cluster.
@@ -47,14 +49,25 @@ class _Phone {
 class ClusterService extends GetxService {
   final HiveService _hive = Get.find<HiveService>();
 
-  static bool get isSupported => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+  /// Android and iOS run the worker in the app; Windows runs a separate
+  /// worker process.
+  static bool get isSupported =>
+      !kIsWeb && (Platform.isAndroid || Platform.isIOS || Platform.isWindows);
 
-  /// Running a model across workers is Android-only for now; iOS devices
-  /// can be workers (their GPU serves a master's layers).
-  static bool get canBeMaster => !kIsWeb && Platform.isAndroid;
+  /// Running a model across workers is Android and Windows for now; iOS
+  /// devices can be workers (their GPU serves a master's layers).
+  static bool get canBeMaster =>
+      !kIsWeb && (Platform.isAndroid || Platform.isWindows);
 
   /// iOS can't stop the worker without closing the app.
   static bool get workerStopsWithApp => !kIsWeb && Platform.isIOS;
+
+  /// Windows has no camera scanner plugin; pairing there is by IP or link.
+  static bool get canScanQr =>
+      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
+  /// A PC build: no camera, no battery optimization, no orientation lock.
+  static bool get isDesktop => !kIsWeb && Platform.isWindows;
 
   /// QR codes a worker shows: privatelm://worker?host=…&port=…
   static const _qrScheme = 'privatelm';
@@ -80,6 +93,13 @@ class ClusterService extends GetxService {
 
   /// This phone's Wi-Fi address, or null when it isn't on Wi-Fi.
   final wifiAddress = RxnString();
+
+  /// Interfaces a cluster could run on (a PC usually has more than one).
+  final interfaces = <({String name, String address})>[].obs;
+
+  /// Windows: whether Windows Firewall already allows the worker port. Null
+  /// where there is no firewall to configure.
+  final firewallReady = RxnBool();
 
   /// How the loaded model is spread across phones; empty when it isn't.
   final split = <ClusterShare>[].obs;
@@ -108,7 +128,9 @@ class ClusterService extends GetxService {
     final saved = _hive.getSetting<List>(AppConstants.keyClusterWorkers) ?? const [];
     workers.assignAll(saved.whereType<Map>().map(ClusterWorker.fromMap));
     if (isSupported) {
-      if (Platform.isIOS) {
+      if (Platform.isWindows) {
+        deviceName = Platform.localHostname;
+      } else if (Platform.isIOS) {
         DeviceInfoPlugin().iosInfo.then((info) => deviceName = info.modelName);
       } else {
         DeviceInfoPlugin().androidInfo.then((info) => deviceName = info.model);
@@ -121,6 +143,7 @@ class ClusterService extends GetxService {
       ever<ClusterWorkerStatus>(worker, (_) => _updateKeepScreenOn());
       ever<bool>(serving, (_) => _updateKeepScreenOn());
       refreshWifiAddress();
+      refreshFirewall();
     }
   }
 
@@ -139,7 +162,7 @@ class ClusterService extends GetxService {
     final on = s.running || s.starting || serving.value;
     if (on == _screenKeptOn) return;
     _screenKeptOn = on;
-    LlamaCluster.setKeepScreenOn(on).catchError((_) {});
+    _backend.setKeepScreenOn(on).catchError((_) {});
   }
 
   Future<void> setRole(ClusterRole next) async {
@@ -165,7 +188,7 @@ class ClusterService extends GetxService {
     if (host == null || !status.running) return null;
     return Uri(scheme: _qrScheme, host: 'worker', queryParameters: {
       'host': host,
-      'port': '${LlamaCluster.defaultPort}',
+      'port': '${ClusterBackend.defaultPort}',
       if (deviceName.isNotEmpty) 'name': deviceName,
       if (status.ramMb > 0) 'ram': '${status.ramMb}',
       if (status.bandwidth > 0) 'bw': status.bandwidth.toStringAsFixed(1),
@@ -177,19 +200,27 @@ class ClusterService extends GetxService {
     if (Platform.isAndroid) {
       // Unrestricted battery keeps Android (Samsung especially) from moving
       // the worker to slow cores once it gets busy.
-      final status = await LlamaCluster.workerStatus();
-      if (!status.batteryUnrestricted) await LlamaCluster.requestBatteryUnrestricted();
+      final status = await _backend.workerStatus();
+      if (!status.batteryUnrestricted) await _backend.requestBatteryUnrestricted();
     }
     _workerRequested.value = true;
     worker.value = const ClusterWorkerStatus(state: 'starting');
-    await LlamaCluster.startWorker();
+    try {
+      await _backend.startWorker(advertiseIp: wifiAddress.value);
+    } catch (e) {
+      Get.find<AppLogService>().error('Cluster worker failed to start', details: e);
+      worker.value = ClusterWorkerStatus(state: 'error', error: _message(e));
+      return;
+    }
+    refreshFirewall();
+    await refreshWorkerStatus();
     _watchWorker();
   }
 
   Future<void> stopWorker() async {
     _workerRequested.value = false;
     _statusTimer?.cancel();
-    await LlamaCluster.stopWorker();
+    await _backend.stopWorker();
     await Future.delayed(const Duration(milliseconds: 600));
     await refreshWorkerStatus();
   }
@@ -212,24 +243,110 @@ class ClusterService extends GetxService {
 
   Future<void> refreshWorkerStatus() async {
     try {
-      worker.value = await LlamaCluster.workerStatus();
+      worker.value = await _backend.workerStatus();
     } catch (e) {
       Get.find<AppLogService>().error('Cluster worker status failed', details: e);
     }
   }
 
-  /// Finds this device's IPv4 address on Wi-Fi (wlan* on Android, en0 on
-  /// iOS), if any.
+  /// The backend for this platform. One instance per process: the Windows one
+  /// owns a child process.
+  ClusterBackend get _backend => ClusterBackend.instance;
+
+  /// Windows: is the worker port allowed through the firewall? Cheap enough
+  /// to re-check whenever the cluster screen opens.
+  Future<void> refreshFirewall() async {
+    try {
+      firewallReady.value = await _backend.firewallReady();
+    } catch (_) {
+      firewallReady.value = null;
+    }
+  }
+
+  /// Windows: creates the firewall rule (one UAC prompt), then re-checks.
+  Future<void> allowFirewall() async {
+    await _backend.allowFirewall();
+    await Future<void>.delayed(const Duration(seconds: 2));
+    await refreshFirewall();
+  }
+
+  static String _message(Object error) {
+    final text = error is Exception ? '$error' : error.toString();
+    return text.replaceFirst(RegExp(r'^Exception: '), '');
+  }
+
+  /// Finds this device's IPv4 address on the network it should cluster on:
+  /// wlan* on Android, en0 on iOS, and on Windows the interface the user
+  /// picked (or the first real one, skipping Hyper-V/WSL/VirtualBox adapters).
   Future<void> refreshWifiAddress() async {
     try {
-      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
-      final wifi = interfaces.where((i) => i.name.startsWith('wlan') || i.name == 'en0');
-      wifiAddress.value = wifi.isEmpty || wifi.first.addresses.isEmpty
-          ? null
-          : wifi.first.addresses.first.address;
+      final all = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      final candidates = _candidates(all);
+      interfaces.assignAll(candidates);
+      if (candidates.isEmpty) {
+        wifiAddress.value = null;
+        return;
+      }
+      final saved = _hive.getSetting<String>(AppConstants.keyClusterInterface);
+      final chosen = candidates.firstWhereOrNull((c) => c.address == saved);
+      wifiAddress.value = (chosen ?? candidates.first).address;
     } catch (_) {
       wifiAddress.value = null;
     }
+  }
+
+  /// Picks the interface to advertise and remembers it across launches.
+  Future<void> setInterface(String address) async {
+    await _hive.setSetting(AppConstants.keyClusterInterface, address);
+    await refreshWifiAddress();
+  }
+
+  static List<({String name, String address})> _candidates(
+      List<NetworkInterface> all) {
+    final usable = <({String name, String address})>[
+      for (final interface in all)
+        for (final address in interface.addresses)
+          if (_isUsable(interface.name, address.address))
+            (name: interface.name, address: address.address),
+    ];
+    if (Platform.isAndroid) {
+      return [for (final c in usable) if (c.name.startsWith('wlan')) c];
+    }
+    if (Platform.isIOS) {
+      return [for (final c in usable) if (c.name == 'en0') c];
+    }
+    // A PC usually has several: put the physical ones first.
+    int rank(({String name, String address}) c) {
+      final name = c.name.toLowerCase();
+      if (name.contains('wi-fi') || name.contains('wifi') || name.contains('wlan')) {
+        return 0;
+      }
+      if (name.contains('ethernet')) return 1;
+      return 2;
+    }
+
+    final sorted = [...usable]..sort((a, b) => rank(a).compareTo(rank(b)));
+    return sorted;
+  }
+
+  static bool _isUsable(String name, String address) {
+    if (address.startsWith('127.') || address.startsWith('169.254.')) return false;
+    if (Platform.isAndroid || Platform.isIOS) return true;
+    // Virtual adapters answer on the host too, and picking one strands the
+    // cluster on a network no other device can reach.
+    const virtual = [
+      'vethernet',
+      'hyper-v',
+      'wsl',
+      'virtualbox',
+      'vmware',
+      'loopback',
+      'npcap',
+      'tailscale',
+      'zerotier',
+    ];
+    final lower = name.toLowerCase();
+    return !virtual.any(lower.contains);
   }
 
   // ── Master: workers ────────────────────────────────────────────────────
@@ -259,11 +376,11 @@ class ClusterService extends GetxService {
   /// an error message, or null on success.
   Future<String?> addManual(String input) async {
     final text = input.trim();
-    if (text.isEmpty) return 'Enter the worker phone\'s IP address';
+    if (text.isEmpty) return 'Enter the worker\'s IP address';
     final host = text.contains(':') ? text.substring(0, text.lastIndexOf(':')) : text;
     final port = text.contains(':')
         ? int.tryParse(text.substring(text.lastIndexOf(':') + 1))
-        : LlamaCluster.defaultPort;
+        : ClusterBackend.defaultPort;
     if (host.isEmpty || port == null) return 'Use the form 192.168.1.20:50052';
     return _add(ClusterWorker(name: host, host: host, port: port));
   }
@@ -276,10 +393,10 @@ class ClusterService extends GetxService {
   Future<List<ClusterWorker>> relocateWorkers() async {
     final missing = <ClusterWorker>[];
     for (final w in workers) {
-      if (!await LlamaCluster.probe(w.endpoint)) missing.add(w);
+      if (!await _backend.probe(w.endpoint)) missing.add(w);
     }
     if (missing.isEmpty) return const [];
-    final seen = await LlamaCluster.discover();
+    final seen = await _backend.discover();
     var moved = 0;
     final unreachable = <ClusterWorker>[];
     for (final w in missing) {
@@ -300,9 +417,9 @@ class ClusterService extends GetxService {
   }
 
   Future<String?> _add(ClusterWorker worker) async {
-    if (!await LlamaCluster.probe(worker.endpoint)) {
-      return 'Can\'t reach ${worker.endpoint}. Check that the phone is a worker '
-          'and on the same Wi-Fi.';
+    if (!await _backend.probe(worker.endpoint)) {
+      return 'Can\'t reach ${worker.endpoint}. Check that Worker is on there '
+          'and that both devices are on the same Wi-Fi.';
     }
     workers.removeWhere((w) => w.endpoint == worker.endpoint);
     workers.add(worker);
@@ -323,7 +440,7 @@ class ClusterService extends GetxService {
     if (isScanning.value) return;
     isScanning.value = true;
     try {
-      final list = await LlamaCluster.discover();
+      final list = await _backend.discover();
       found.assignAll(list.where((w) => !isAdded(w)));
     } finally {
       isScanning.value = false;
@@ -354,7 +471,7 @@ class ClusterService extends GetxService {
     split.clear();
     if (!isSupported) return 0;
     if (!enabled.value || workers.isEmpty) {
-      await LlamaCluster.clear();
+      await _backend.clear();
       return 0;
     }
 
@@ -369,10 +486,10 @@ class ClusterService extends GetxService {
 
     final modelMb = await File(modelPath).length() / (1024 * 1024);
     final needMb = modelMb * 1.1; // + KV cache and working buffers
-    _localSpeed ??= await LlamaCluster.benchmark();
+    _localSpeed ??= await _backend.benchmark();
     // Free RAM: workers report theirs when they start. The master also runs
     // the app and the KV cache, so it offers less of its own.
-    final master = _Phone(null, await LlamaCluster.localFreeRamMb() * 0.7, _localSpeed!);
+    final master = _Phone(null, await _backend.localFreeRamMb() * 0.7, _localSpeed!);
     final phones = [
       master,
       for (final w in available)
@@ -388,14 +505,14 @@ class ClusterService extends GetxService {
     }
 
     if (available.isEmpty) {
-      await LlamaCluster.clear();
+      await _backend.clear();
       return 0;
     }
     if (needMb <= master.capacityMb) {
       final share = await _askFitsHere(
-          modelName ?? modelPath.split('/').last, modelMb, available.length);
+          modelName ?? p.basename(modelPath), modelMb, available.length);
       if (!share) {
-        await LlamaCluster.clear();
+        await _backend.clear();
         return 0;
       }
       _splitBySpeed(phones, needMb);
@@ -405,11 +522,11 @@ class ClusterService extends GetxService {
 
     final used = phones.where((p) => p.worker != null && p.assignedMb > 0).toList();
     if (used.isEmpty) {
-      await LlamaCluster.clear();
+      await _backend.clear();
       return 0;
     }
     try {
-      await LlamaCluster.setCluster(
+      await _backend.setCluster(
         [for (final p in used) p.worker!],
         weights: [for (final p in used) p.assignedMb],
         localWeight: master.assignedMb,
@@ -417,7 +534,7 @@ class ClusterService extends GetxService {
     } on PlatformException catch (e) {
       throw Exception(
           '${e.message ?? 'A worker is unreachable'}. Turn on Worker on that '
-          'phone, or set this phone\'s Phone cluster to Off.');
+          'device, or set this device\'s cluster role to Off.');
     }
     return used.length;
   }
@@ -522,7 +639,7 @@ class ClusterService extends GetxService {
   /// share is the rest of the file, because its own buffers overlap (the
   /// mapped file and the CPU's repacked copy of the same weights).
   Future<void> refreshSplit(String modelPath) async {
-    final buffers = await LlamaCluster.lastLoadBuffers();
+    final buffers = await _backend.lastLoadBuffers();
     final remote = <String, double>{};
     for (final b in buffers) {
       final open = b.name.indexOf('[');

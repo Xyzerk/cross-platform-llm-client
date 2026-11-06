@@ -85,9 +85,53 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
   PREFIX ""
 )
 
-# Flutter copies this into the runner output directory. Everything else is
-# statically linked, so the DLL is the only artifact to bundle.
+# ---------------------------------------------------------------------------
+# Cluster worker (Phase 4): a separate process because
+# ggml_backend_rpc_start_server blocks forever and cannot be stopped in-process.
+# It links the same static llama.cpp/RPC code as the DLL, so the RPC protocol
+# version matches every Android/iOS worker.
+# ---------------------------------------------------------------------------
+add_executable(privatelm_rpc_worker
+  "rpc_worker/main.cpp"
+  "rpc_worker/status_writer.cpp"
+  "rpc_worker/mdns_advertiser.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/plm_core.cpp"
+)
+
+target_include_directories(privatelm_rpc_worker PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../android/src/main/cpp/llama.cpp/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../android/src/main/cpp/llama.cpp/ggml/include"
+)
+
+target_compile_definitions(privatelm_rpc_worker PRIVATE
+  NOMINMAX
+  WIN32_LEAN_AND_MEAN
+  UNICODE
+  _UNICODE
+)
+
+target_link_libraries(privatelm_rpc_worker PRIVATE
+  llama
+  ggml
+  ws2_32
+  dnsapi
+  psapi
+)
+
+set_target_properties(privatelm_rpc_worker PROPERTIES
+  OUTPUT_NAME "privatelm_rpc_worker"
+  PREFIX ""
+)
+
+# The install step copies bundled libraries next to privatelm.exe. Make sure
+# the worker is built whenever the plugin is.
+add_dependencies(${PROJECT_NAME} privatelm_rpc_worker)
+
+# Flutter copies these into the runner output directory. Everything else is
+# statically linked, so the DLL and the worker exe are the only artifacts.
 set(${PROJECT_NAME}_bundled_libraries
   $<TARGET_FILE:${PROJECT_NAME}>
+  $<TARGET_FILE:privatelm_rpc_worker>
   PARENT_SCOPE
 )
