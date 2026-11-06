@@ -13,23 +13,23 @@ This document is an implementation plan, not a promise of scope. Phases are orde
 
 ## 1. Decisions up front
 
-| Decision | Choice | Why |
-|---|---|---|
-| Native engine | Reuse the bundled `llama.cpp` tree from `local_plugins/llama_flutter_android/android/src/main/cpp/llama.cpp` | The ggml RPC protocol version is compiled into both sides. Building Windows from the same commit is the only reliable way to interoperate with Android/iOS. |
-| Windows transport | Dart FFI against a new `llama_flutter_android.dll` | The plugin's Dart controller already owns load/generate/stop logic. Pigeon C++ codegen and StandardMessageCodec in C++ would add a lot of surface for no benefit. `sd_flutter_android` already uses FFI, so the pattern exists. |
-| Worker model | Separate `privatelm_rpc_worker.exe` child process | `ggml_backend_rpc_start_server` blocks forever and cannot be stopped in-process. Android already isolates it in a `:cluster` process for this reason. |
-| Cluster discovery | Manual IP + QR guaranteed; mDNS as an enhancement | Windows firewall and router multicast filtering make mDNS unreliable. Manual/QR already exists and is the fallback. |
-| Windows master | Supported | Required by "Windows master + phone workers". |
-| iOS master | Not added | Out of scope; iOS stays worker-only. |
-| LiteRT-LM on Windows | Deferred | `flutter_litert_lm` has no Windows runtime. `.litertlm` is rejected with a clear message. |
-| Local Stable Diffusion on Windows | Deferred | `sd_flutter_android` is Android-only and depends on a native submodule. `.safetensors` is rejected with a clear message. |
-| Windows ARM64 | Deferred | x64 first. |
+| Decision                          | Choice                                                                                                       | Why                                                                                                                                                                                                                             |
+|-----------------------------------|--------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Native engine                     | Reuse the bundled `llama.cpp` tree from `local_plugins/llama_flutter_android/android/src/main/cpp/llama.cpp` | The ggml RPC protocol version is compiled into both sides. Building Windows from the same commit is the only reliable way to interoperate with Android/iOS.                                                                     |
+| Windows transport                 | Dart FFI against a new `llama_flutter_android.dll`                                                           | The plugin's Dart controller already owns load/generate/stop logic. Pigeon C++ codegen and StandardMessageCodec in C++ would add a lot of surface for no benefit. `sd_flutter_android` already uses FFI, so the pattern exists. |
+| Worker model                      | Separate `privatelm_rpc_worker.exe` child process                                                            | `ggml_backend_rpc_start_server` blocks forever and cannot be stopped in-process. Android already isolates it in a `:cluster` process for this reason.                                                                           |
+| Cluster discovery                 | Manual IP + QR guaranteed; mDNS as an enhancement                                                            | Windows firewall and router multicast filtering make mDNS unreliable. Manual/QR already exists and is the fallback.                                                                                                             |
+| Windows master                    | Supported                                                                                                    | Required by "Windows master + phone workers".                                                                                                                                                                                   |
+| iOS master                        | Not added                                                                                                    | Out of scope; iOS stays worker-only.                                                                                                                                                                                            |
+| LiteRT-LM on Windows              | Deferred                                                                                                     | `flutter_litert_lm` has no Windows runtime. `.litertlm` is rejected with a clear message.                                                                                                                                       |
+| Local Stable Diffusion on Windows | Deferred                                                                                                     | `sd_flutter_android` is Android-only and depends on a native submodule. `.safetensors` is rejected with a clear message.                                                                                                        |
+| Windows ARM64                     | Deferred                                                                                                     | x64 first.                                                                                                                                                                                                                      |
 
 ---
 
 ## 2. Target architecture
 
-```
+```text
 Windows app (Flutter)
 ├─ InferenceService
 │  └─ InferenceEngine (inference_android.dart, shared by Android/iOS/Windows)
@@ -110,7 +110,7 @@ Key invariant: **the Windows master and the Windows worker both use the same `ll
 The current engine lives in `local_plugins/llama_flutter_android/android/src/main/cpp/jni_wrapper.cpp` (≈55 KB). Most of it is not JNI-specific.
 
 1. Create a shared native directory:
-   ```
+   ```text
    local_plugins/llama_flutter_android/native/
      llama_engine_core.h
      llama_engine_core.cpp
@@ -131,7 +131,7 @@ The current engine lives in `local_plugins/llama_flutter_android/android/src/mai
 3. Keep `jni_wrapper.cpp` as a thin JNI adapter that calls the core. Android behavior must not change.
 4. Add the core to `android/CMakeLists.txt`.
 5. Create the Windows adapter:
-   ```
+   ```text
    local_plugins/llama_flutter_android/windows/
      CMakeLists.txt
      llama_ffi.cpp
@@ -142,7 +142,7 @@ The current engine lives in `local_plugins/llama_flutter_android/android/src/mai
    int  plm_load_model(const char* path, int threads, int ctx, int gpu_layers,
                        const char* mmproj, plm_progress_cb cb, void* user);
    int  plm_generate(const char* prompt, int max_tokens, double temperature,
-                     /* sampling params */, plm_token_cb cb, plm_done_cb done,
+                     /* sampling params */ plm_token_cb cb, plm_done_cb done,
                      void* user);
    void plm_stop(void);
    void plm_unload(void);
@@ -181,7 +181,7 @@ The current engine lives in `local_plugins/llama_flutter_android/android/src/mai
 **Deliverable:** standalone Windows chat with a GGUF model, including the existing prompt/template behavior.
 
 1. Add a `LlamaHost` abstraction inside the plugin:
-   ```
+   ```text
    lib/src/llama_host.dart          # web-safe factory
    lib/src/llama_host_io.dart       # dart:io + dart:ffi, picks by Platform.isWindows
    lib/src/llama_host_stub.dart     # web no-op
@@ -234,7 +234,7 @@ The current engine lives in `local_plugins/llama_flutter_android/android/src/mai
 **Deliverable:** `ClusterService` works on Windows without importing platform channels.
 
 1. Add an app-level backend:
-   ```
+   ```text
    lib/services/cluster_backend.dart       # conditional export
    lib/services/cluster_backend_io.dart    # dart:io, runtime dispatch
    lib/services/cluster_backend_stub.dart  # web no-op
@@ -252,7 +252,7 @@ The current engine lives in `local_plugins/llama_flutter_android/android/src/mai
      Future<int> localFreeRamMb();
      Future<double> benchmark();
      Future<List<({String name, double mb})>> lastLoadBuffers();
-     Future<List<ClusterWorker>> discover({Duration timeout});
+     Future<List<ClusterWorker>> discover({Duration? timeout});
      Future<bool> probe(String endpoint);
      Future<void> setCluster(List<ClusterWorker> workers,
          {List<double>? weights, double localWeight});
@@ -283,14 +283,14 @@ The current engine lives in `local_plugins/llama_flutter_android/android/src/mai
 **Deliverable:** Android/iOS master can use a Windows PC as a worker.
 
 1. Add a new CMake target:
-   ```
+   ```text
    local_plugins/llama_flutter_android/windows/rpc_worker/
      main.cpp
      status_writer.cpp
      mdns_advertiser.cpp   # optional; manual IP works without it
    ```
    Arguments:
-   ```
+   ```text
    --host 0.0.0.0 --port 50052 --threads N
    --cache-dir <temp> --status-file <temp>/worker.json --id <stable-id>
    ```
@@ -403,44 +403,44 @@ The current engine lives in `local_plugins/llama_flutter_android/android/src/mai
 
 ## 11. Verification matrix
 
-| # | Scenario | Expected |
-|---|---|---|
-| 1 | Windows standalone, GGUF, CPU | Model loads, tokens stream, stop works |
-| 2 | Windows standalone, GGUF, Vulkan (if built) | GPU detected, load succeeds or falls back to CPU |
-| 3 | Windows master + Android worker | Split bar shows both; tokens stream; worker shows master peer |
-| 4 | Windows master + iOS worker | Same as #3 |
-| 5 | Android master + Windows worker | Android adds Windows by IP/QR; tokens stream; Windows status shows peer |
-| 6 | Windows master + Windows worker | Same as #3 |
-| 7 | Windows master + Android + iOS workers | 3-way split; model fits |
-| 8 | Model too big for all devices | Planning error names the shortfall; no crash |
-| 9 | Worker unreachable at load | Readable error; master process survives |
-| 10 | Worker IP changes | `relocateWorkers` finds it by `id` |
-| 11 | Worker stopped/restarted | Master reloads without stale RPC state |
-| 12 | Firewall blocks 50052 | Clear OS error / instructions, not a hang |
-| 13 | Public network profile | Warning + instructions |
-| 14 | Multiple NICs (Wi-Fi + Ethernet + Hyper-V) | User can pick the LAN interface |
-| 15 | `.litertlm` on Windows | Clear "not supported on Windows" message |
-| 16 | `.safetensors` on Windows | Clear "not supported on Windows" message |
-| 17 | Windows paths with spaces / non-ASCII | Download, import, load all work |
-| 18 | Android/iOS regression | Existing cluster + inference behavior unchanged |
+| #  | Scenario                                    | Expected                                                                |
+|----|---------------------------------------------|-------------------------------------------------------------------------|
+| 1  | Windows standalone, GGUF, CPU               | Model loads, tokens stream, stop works                                  |
+| 2  | Windows standalone, GGUF, Vulkan (if built) | GPU detected, load succeeds or falls back to CPU                        |
+| 3  | Windows master + Android worker             | Split bar shows both; tokens stream; worker shows master peer           |
+| 4  | Windows master + iOS worker                 | Same as #3                                                              |
+| 5  | Android master + Windows worker             | Android adds Windows by IP/QR; tokens stream; Windows status shows peer |
+| 6  | Windows master + Windows worker             | Same as #3                                                              |
+| 7  | Windows master + Android + iOS workers      | 3-way split; model fits                                                 |
+| 8  | Model too big for all devices               | Planning error names the shortfall; no crash                            |
+| 9  | Worker unreachable at load                  | Readable error; master process survives                                 |
+| 10 | Worker IP changes                           | `relocateWorkers` finds it by `id`                                      |
+| 11 | Worker stopped/restarted                    | Master reloads without stale RPC state                                  |
+| 12 | Firewall blocks 50052                       | Clear OS error / instructions, not a hang                               |
+| 13 | Public network profile                      | Warning + instructions                                                  |
+| 14 | Multiple NICs (Wi-Fi + Ethernet + Hyper-V)  | User can pick the LAN interface                                         |
+| 15 | `.litertlm` on Windows                      | Clear "not supported on Windows" message                                |
+| 16 | `.safetensors` on Windows                   | Clear "not supported on Windows" message                                |
+| 17 | Windows paths with spaces / non-ASCII       | Download, import, load all work                                         |
+| 18 | Android/iOS regression                      | Existing cluster + inference behavior unchanged                         |
 
 ---
 
 ## 12. Risks and mitigations
 
-| Risk | Impact | Mitigation |
-|---|---|---|
-| RPC protocol mismatch | Workers connect but fail | Build Windows from the same `llama.cpp` commit; advertise/check `v=rpc7`; show a mismatch error |
-| Windows firewall / Public profile | Master cannot reach worker | First-run guidance, elevated rule helper, manual IP, docs |
-| mDNS blocked by router | Auto-discovery fails | Manual IP + QR are guaranteed; UDP beacon as a later enhancement |
-| `ggml_backend_rpc_add_server` aborts on unreachable worker | App process dies | Always `probe` first; keep the existing "unreachable" error path; consider running master load in a child process only if this proves unreliable |
-| Unsupported Flutter plugins on Windows | Build or runtime failure | Phase 6 audit; runtime guards; conditional imports |
-| `flutter_litert_lm` / `sd_flutter_android` compile issues | Windows build breaks | They declare no Windows platform, so Flutter skips their native builds; guard Dart entry points and verify `flutter build windows` |
-| Unsigned exe / SmartScreen | Users cannot run | Document "More info → Run anyway"; code signing later |
-| Windows Defender flags the worker exe | Worker fails to start | Sign binaries; document exclusions; keep the worker small and transparent |
-| RAM detection differences | Bad cluster plan | Use `GlobalMemoryStatusEx`; cap local share at 70% like Android; show the planned split before load |
-| Vulkan driver issues | Crash on load | CPU first; make Vulkan opt-in; keep the existing CPU fallback |
-| Long paths / spaces | File operations fail | `p.join`, quote process args, avoid manual string concatenation |
+| Risk                                                       | Impact                     | Mitigation                                                                                                                                       |
+|------------------------------------------------------------|----------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|
+| RPC protocol mismatch                                      | Workers connect but fail   | Build Windows from the same `llama.cpp` commit; advertise/check `v=rpc7`; show a mismatch error                                                  |
+| Windows firewall / Public profile                          | Master cannot reach worker | First-run guidance, elevated rule helper, manual IP, docs                                                                                        |
+| mDNS blocked by router                                     | Auto-discovery fails       | Manual IP + QR are guaranteed; UDP beacon as a later enhancement                                                                                 |
+| `ggml_backend_rpc_add_server` aborts on unreachable worker | App process dies           | Always `probe` first; keep the existing "unreachable" error path; consider running master load in a child process only if this proves unreliable |
+| Unsupported Flutter plugins on Windows                     | Build or runtime failure   | Phase 6 audit; runtime guards; conditional imports                                                                                               |
+| `flutter_litert_lm` / `sd_flutter_android` compile issues  | Windows build breaks       | They declare no Windows platform, so Flutter skips their native builds; guard Dart entry points and verify `flutter build windows`               |
+| Unsigned exe / SmartScreen                                 | Users cannot run           | Document "More info → Run anyway"; code signing later                                                                                            |
+| Windows Defender flags the worker exe                      | Worker fails to start      | Sign binaries; document exclusions; keep the worker small and transparent                                                                        |
+| RAM detection differences                                  | Bad cluster plan           | Use `GlobalMemoryStatusEx`; cap local share at 70% like Android; show the planned split before load                                              |
+| Vulkan driver issues                                       | Crash on load              | CPU first; make Vulkan opt-in; keep the existing CPU fallback                                                                                    |
+| Long paths / spaces                                        | File operations fail       | `p.join`, quote process args, avoid manual string concatenation                                                                                  |
 
 ---
 
@@ -448,81 +448,81 @@ The current engine lives in `local_plugins/llama_flutter_android/android/src/mai
 
 ### App
 
-| File | Change |
-|---|---|
-| `windows/` | New runner (generated), window sizing, resources |
-| `pubspec.yaml` | Add `path`, `multicast_dns`; Windows platform for the plugin |
-| `lib/main.dart` | Skip orientation lock on Windows |
-| `lib/services/cluster_service.dart` | Use `ClusterBackend`; Windows in `isSupported`/`canBeMaster`; device name; Wi-Fi address; `p.basename` |
-| `lib/services/cluster_backend.dart` | New conditional export |
-| `lib/services/cluster_backend_io.dart` | New runtime dispatch |
-| `lib/services/cluster_backend_stub.dart` | New web no-op |
-| `lib/services/cluster_windows_backend.dart` | New FFI + process + mDNS backend |
-| `lib/services/cluster_planner.dart` | New extracted pure planning logic |
-| `lib/services/inference_android.dart` | Windows support; LiteRT/SD guards; shared prompt builder |
-| `lib/services/chat_prompt_builder.dart` | New shared prompt/template builders |
-| `lib/services/inference_service.dart` | `p.basename`; keep platform selection |
-| `lib/services/device_info_native.dart` | Windows RAM/SoC/GPU branch |
-| `lib/services/download_native.dart` | `p.basename` / `p.join` |
-| `lib/services/local_image_service.dart` | Windows guard with clear message |
-| `lib/services/update_service.dart` | Keep Android-only; Windows link |
-| `lib/services/crash_reporting_service.dart` | Windows branch / safe disable |
-| `lib/views/cluster_view.dart` | Desktop copy; hide scanner; paste-link; interface picker |
-| `lib/views/model_view.dart` | Hide unsupported model types on Windows |
-| `lib/controllers/model_controller.dart` | Windows path handling; model-type filtering |
-| `lib/controllers/chat_controller.dart` | Guard image generation on Windows |
-| `lib/core/constants.dart` | `cluster_interface`, `cluster_worker_id` keys |
-| `docs/windows-build.md` | New |
-| `docs/windows-cluster.md` | New |
-| `scripts/build_windows.ps1` | New |
+| File                                        | Change                                                                                                 |
+|---------------------------------------------|--------------------------------------------------------------------------------------------------------|
+| `windows/`                                  | New runner (generated), window sizing, resources                                                       |
+| `pubspec.yaml`                              | Add `path`, `multicast_dns`; Windows platform for the plugin                                           |
+| `lib/main.dart`                             | Skip orientation lock on Windows                                                                       |
+| `lib/services/cluster_service.dart`         | Use `ClusterBackend`; Windows in `isSupported`/`canBeMaster`; device name; Wi-Fi address; `p.basename` |
+| `lib/services/cluster_backend.dart`         | New conditional export                                                                                 |
+| `lib/services/cluster_backend_io.dart`      | New runtime dispatch                                                                                   |
+| `lib/services/cluster_backend_stub.dart`    | New web no-op                                                                                          |
+| `lib/services/cluster_windows_backend.dart` | New FFI + process + mDNS backend                                                                       |
+| `lib/services/cluster_planner.dart`         | New extracted pure planning logic                                                                      |
+| `lib/services/inference_android.dart`       | Windows support; LiteRT/SD guards; shared prompt builder                                               |
+| `lib/services/chat_prompt_builder.dart`     | New shared prompt/template builders                                                                    |
+| `lib/services/inference_service.dart`       | `p.basename`; keep platform selection                                                                  |
+| `lib/services/device_info_native.dart`      | Windows RAM/SoC/GPU branch                                                                             |
+| `lib/services/download_native.dart`         | `p.basename` / `p.join`                                                                                |
+| `lib/services/local_image_service.dart`     | Windows guard with clear message                                                                       |
+| `lib/services/update_service.dart`          | Keep Android-only; Windows link                                                                        |
+| `lib/services/crash_reporting_service.dart` | Windows branch / safe disable                                                                          |
+| `lib/views/cluster_view.dart`               | Desktop copy; hide scanner; paste-link; interface picker                                               |
+| `lib/views/model_view.dart`                 | Hide unsupported model types on Windows                                                                |
+| `lib/controllers/model_controller.dart`     | Windows path handling; model-type filtering                                                            |
+| `lib/controllers/chat_controller.dart`      | Guard image generation on Windows                                                                      |
+| `lib/core/constants.dart`                   | `cluster_interface`, `cluster_worker_id` keys                                                          |
+| `docs/windows-build.md`                     | New                                                                                                    |
+| `docs/windows-cluster.md`                   | New                                                                                                    |
+| `scripts/build_windows.ps1`                 | New                                                                                                    |
 
 ### Plugin `llama_flutter_android`
 
-| File | Change |
-|---|---|
-| `pubspec.yaml` | Add `windows: ffiPlugin: true` |
-| `lib/src/llama_host.dart` | New web-safe factory |
-| `lib/src/llama_host_io.dart` | New platform dispatch |
-| `lib/src/llama_host_stub.dart` | New web no-op |
-| `lib/src/llama_host_pigeon.dart` | New wrapper around `LlamaHostApi` |
-| `lib/src/llama_host_ffi.dart` | New Windows FFI host |
-| `lib/src/llama_windows_ffi.dart` | New FFI bindings |
-| `lib/src/llama_controller.dart` | Use `LlamaHost` instead of `LlamaHostApi` |
-| `lib/llama_flutter_android.dart` | Export new host types if needed |
-| `android/src/main/cpp/jni_wrapper.cpp` | Thin JNI adapter over the core |
-| `android/src/main/cpp/llama_engine_core.{h,cpp}` | New shared core |
-| `android/src/main/cpp/llama_cluster_plan.{h,cpp}` | New shared cluster plan |
-| `android/CMakeLists.txt` | Add core sources |
-| `windows/CMakeLists.txt` | New DLL + worker targets |
-| `windows/llama_ffi.{h,cpp}` | New C ABI adapter |
-| `windows/rpc_worker/main.cpp` | New worker process |
-| `windows/rpc_worker/status_writer.cpp` | New status JSON |
-| `windows/rpc_worker/mdns_advertiser.cpp` | New (Phase 4b) |
-| `README.md` | Windows section |
+| File                                              | Change                                    |
+|---------------------------------------------------|-------------------------------------------|
+| `pubspec.yaml`                                    | Add `windows: ffiPlugin: true`            |
+| `lib/src/llama_host.dart`                         | New web-safe factory                      |
+| `lib/src/llama_host_io.dart`                      | New platform dispatch                     |
+| `lib/src/llama_host_stub.dart`                    | New web no-op                             |
+| `lib/src/llama_host_pigeon.dart`                  | New wrapper around `LlamaHostApi`         |
+| `lib/src/llama_host_ffi.dart`                     | New Windows FFI host                      |
+| `lib/src/llama_windows_ffi.dart`                  | New FFI bindings                          |
+| `lib/src/llama_controller.dart`                   | Use `LlamaHost` instead of `LlamaHostApi` |
+| `lib/llama_flutter_android.dart`                  | Export new host types if needed           |
+| `android/src/main/cpp/jni_wrapper.cpp`            | Thin JNI adapter over the core            |
+| `android/src/main/cpp/llama_engine_core.{h,cpp}`  | New shared core                           |
+| `android/src/main/cpp/llama_cluster_plan.{h,cpp}` | New shared cluster plan                   |
+| `android/CMakeLists.txt`                          | Add core sources                          |
+| `windows/CMakeLists.txt`                          | New DLL + worker targets                  |
+| `windows/llama_ffi.{h,cpp}`                       | New C ABI adapter                         |
+| `windows/rpc_worker/main.cpp`                     | New worker process                        |
+| `windows/rpc_worker/status_writer.cpp`            | New status JSON                           |
+| `windows/rpc_worker/mdns_advertiser.cpp`          | New (Phase 4b)                            |
+| `README.md`                                       | Windows section                           |
 
 ### Tests
 
-| File | Change |
-|---|---|
-| `test/cluster_planner_test.dart` | New |
-| `test/path_helpers_test.dart` | New |
-| `test/cluster_backend_test.dart` | New |
-| `test/windows_engine_smoke_test.dart` | New, skipped unless Windows + `PRIVATELM_TEST_GGUF` is set |
-| `local_plugins/llama_flutter_android/test/llama_controller_test.dart` | New |
+| File                                                                  | Change                                                     |
+|-----------------------------------------------------------------------|------------------------------------------------------------|
+| `test/cluster_planner_test.dart`                                      | New                                                        |
+| `test/path_helpers_test.dart`                                         | New                                                        |
+| `test/cluster_backend_test.dart`                                      | New                                                        |
+| `test/windows_engine_smoke_test.dart`                                 | New, skipped unless Windows + `PRIVATELM_TEST_GGUF` is set |
+| `local_plugins/llama_flutter_android/test/llama_controller_test.dart` | New                                                        |
 
 ---
 
 ## 14. Milestones and estimate
 
-| Milestone | Phases | Outcome | Estimate |
-|---|---|---|---|
-| M1: Windows shell | 0 | App launches on Windows | 1–2 days |
-| M2: Standalone inference | 1–2 | GGUF chat works on Windows | 5–8 days |
-| M3: Cluster plumbing | 3 | Master/Worker UI works on Windows | 2 days |
-| M4: Windows worker | 4 | Android/iOS master can use a Windows worker | 3–5 days |
-| M5: Windows master | 5 | Windows can use phone workers | 2–3 days |
-| M6: Polish | 6 | No unsupported-feature crashes; paths fixed | 2–4 days |
-| M7: Release | 7 | Tests, zip, docs | 2–3 days |
+| Milestone                | Phases | Outcome                                     | Estimate |
+|--------------------------|--------|---------------------------------------------|----------|
+| M1: Windows shell        | 0      | App launches on Windows                     | 1–2 days |
+| M2: Standalone inference | 1–2    | GGUF chat works on Windows                  | 5–8 days |
+| M3: Cluster plumbing     | 3      | Master/Worker UI works on Windows           | 2 days   |
+| M4: Windows worker       | 4      | Android/iOS master can use a Windows worker | 3–5 days |
+| M5: Windows master       | 5      | Windows can use phone workers               | 2–3 days |
+| M6: Polish               | 6      | No unsupported-feature crashes; paths fixed | 2–4 days |
+| M7: Release              | 7      | Tests, zip, docs                            | 2–3 days |
 
 Total: roughly **17–27 developer-days** (4–5 weeks for one developer). Standalone Windows inference is usable after M2; full two-way clustering after M5.
 

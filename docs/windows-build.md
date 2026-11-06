@@ -87,7 +87,7 @@ absent or empty, add the SDK component:
   --passive --norestart
 ```
 
-Reboot afterwards if `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component
+Reboot afterward if `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component
 Based Servicing\RebootPending` exists; the installer leaves the SDK half-written
 until the transaction completes.
 
