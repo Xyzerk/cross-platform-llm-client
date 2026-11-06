@@ -1,18 +1,22 @@
 import 'dart:async';
 import 'dart:ffi' show Abi;
 import 'dart:io' show Platform, Directory, File;
+import 'dart:math' as math;
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_litert_lm/flutter_litert_lm.dart';
 import 'package:llama_flutter_android/llama_flutter_android.dart';
+import 'chat_prompt_builder.dart';
 
 /// Whether the current platform supports local inference.
-bool get supportsLocalInference => Platform.isAndroid || Platform.isIOS;
+bool get supportsLocalInference =>
+    Platform.isAndroid || Platform.isIOS || Platform.isWindows;
 
-/// True when the app runs as a 32-bit process (32-bit Android, e.g. Android
-/// Go phones). LiteRT ships 64-bit only, and the address space limits model
-/// size.
+/// True when the app runs as a 32-bit Android process (32-bit Android, e.g.
+/// Android Go phones). LiteRT ships 64-bit only, and the address space limits
+/// model size.
 bool get isRunning32Bit =>
-    Abi.current() == Abi.androidArm || Abi.current() == Abi.androidIA32;
+    Platform.isAndroid &&
+    (Abi.current() == Abi.androidArm || Abi.current() == Abi.androidIA32);
 
 Future<int> fileLength(String path) => File(path).length();
 
@@ -34,7 +38,7 @@ class LoadResult {
   });
 }
 
-/// Android & iOS inference engine — wraps llama_flutter_android.
+/// Android, iOS & Windows inference engine — wraps llama_flutter_android.
 class InferenceEngine {
   LlamaController? _controller;
   LiteLmEngine? _liteEngine;
@@ -72,6 +76,27 @@ class InferenceEngine {
   }) async {
     _disposed = false;
     final runtime = _runtimeFor(modelPath, modelRuntime);
+
+    // Windows has no LiteRT-LM or Stable Diffusion runtime yet. Reject those
+    // model types up front with a clear message instead of failing inside a
+    // native loader that isn't there.
+    if (Platform.isWindows) {
+      if (runtime == 'litert') {
+        return LoadResult(
+          success: false,
+          message: 'LiteRT-LM models (.litertlm) are not supported on Windows '
+              'yet. Use a GGUF model instead.',
+        );
+      }
+      if (modelPath.toLowerCase().endsWith('.safetensors')) {
+        return LoadResult(
+          success: false,
+          message: 'Local image generation models (.safetensors) are not '
+              'supported on Windows yet. Use Cloud image generation instead.',
+        );
+      }
+    }
+
     if (runtime == 'litert') {
       return _loadLiteRtModel(
         modelPath,
@@ -141,7 +166,11 @@ class InferenceEngine {
 
     // ── Thread Tuning ──
     int threads;
-    if (gpuLayers > 0) {
+    if (Platform.isWindows) {
+      // Desktop CPUs have many logical cores; cap the count so llama.cpp is
+      // not oversubscribed by SMT siblings / the UI thread.
+      threads = math.max(1, math.min(Platform.numberOfProcessors, 16));
+    } else if (gpuLayers > 0) {
       threads = deviceTier == 'ultra'
           ? 4
           : deviceTier == 'high'
@@ -161,7 +190,7 @@ class InferenceEngine {
     // that corrupt logits at >1 thread on Gemma models. Force single-threaded
     // to eliminate KV cache races in the quantization dot-product path.
     final modelName = modelPath.toLowerCase();
-    if (isTensorSoC && modelName.contains('gemma')) {
+    if (!Platform.isWindows && isTensorSoC && modelName.contains('gemma')) {
       threads = 1;
       print(
           '[Inference] Tensor SoC + Gemma detected — forcing single-threaded inference');
@@ -400,7 +429,7 @@ class InferenceEngine {
     // ── Use generateChat() for native template handling ──
     Stream<String>? stream;
     try {
-      final messages = _buildChatMessages(
+      final messages = buildChatMessages(
           prompt, conversationHistory, systemPrompt,
           imagePath: imagePath);
       stream = _controller!.generateChat(
@@ -422,7 +451,7 @@ class InferenceEngine {
       } catch (_) {}
       await Future.delayed(const Duration(milliseconds: 100));
       final fullPrompt =
-          _buildPrompt(prompt, conversationHistory, systemPrompt, modelName);
+          buildPrompt(prompt, conversationHistory, systemPrompt, modelName);
       stream = _controller!.generate(
         prompt: fullPrompt,
         maxTokens: maxTokens,
@@ -875,111 +904,5 @@ class InferenceEngine {
       }
     }
     return false;
-  }
-
-  List<ChatMessage> _buildChatMessages(
-    String prompt,
-    List<Map<String, String>>? history,
-    String systemPrompt, {
-    String? imagePath,
-  }) {
-    final messages = <ChatMessage>[];
-    messages.add(ChatMessage(role: 'system', content: systemPrompt));
-
-    if (history != null && history.isNotEmpty) {
-      var recent = history.length > 16
-          ? history.sublist(history.length - 16)
-          : List.of(history);
-      if (recent.isNotEmpty &&
-          recent.last['role'] == 'user' &&
-          recent.last['content'] == prompt) {
-        recent = recent.sublist(0, recent.length - 1);
-      }
-      for (final msg in recent) {
-        final content = msg['content'] ?? '';
-        messages
-            .add(ChatMessage(role: msg['role'] ?? 'user', content: content));
-      }
-    }
-
-    messages
-        .add(ChatMessage(role: 'user', content: prompt, imagePath: imagePath));
-    return messages;
-  }
-
-  String _buildPrompt(
-    String userMessage,
-    List<Map<String, String>>? history,
-    String systemPrompt,
-    String modelName,
-  ) {
-    // Auto-detect template from model name
-    final name = modelName.toLowerCase();
-    if (name.contains('gemma')) {
-      return _buildGemma(userMessage, history, systemPrompt);
-    }
-    if (name.contains('llama-3') || name.contains('llama3')) {
-      return _buildLlama3(userMessage, history, systemPrompt);
-    }
-    return _buildChatML(userMessage, history, systemPrompt);
-  }
-
-  String _buildChatML(
-      String msg, List<Map<String, String>>? history, String sys) {
-    final buf = StringBuffer();
-    buf.write('<|im_start|>system\n$sys<|im_end|>\n');
-    if (history != null) {
-      final recent =
-          history.length > 8 ? history.sublist(history.length - 8) : history;
-      for (final m in recent) {
-        final content = m['content'] ?? '';
-        final trunc =
-            content.length > 300 ? '${content.substring(0, 300)}...' : content;
-        buf.write('<|im_start|>${m['role'] ?? 'user'}\n$trunc<|im_end|>\n');
-      }
-    }
-    buf.write('<|im_start|>user\n$msg<|im_end|>\n<|im_start|>assistant\n');
-    return buf.toString();
-  }
-
-  String _buildGemma(
-      String msg, List<Map<String, String>>? history, String sys) {
-    final buf = StringBuffer();
-    buf.write(
-        '<start_of_turn>user\n$sys<end_of_turn>\n<start_of_turn>model\nUnderstood.<end_of_turn>\n');
-    if (history != null) {
-      final recent =
-          history.length > 4 ? history.sublist(history.length - 4) : history;
-      for (final m in recent) {
-        final role = m['role'] == 'assistant' ? 'model' : 'user';
-        final content = m['content'] ?? '';
-        final trunc =
-            content.length > 300 ? '${content.substring(0, 300)}...' : content;
-        buf.write('<start_of_turn>$role\n$trunc<end_of_turn>\n');
-      }
-    }
-    buf.write('<start_of_turn>user\n$msg<end_of_turn>\n<start_of_turn>model\n');
-    return buf.toString();
-  }
-
-  String _buildLlama3(
-      String msg, List<Map<String, String>>? history, String sys) {
-    final buf = StringBuffer();
-    buf.write(
-        '<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n$sys<|eot_id|>');
-    if (history != null) {
-      final recent =
-          history.length > 4 ? history.sublist(history.length - 4) : history;
-      for (final m in recent) {
-        final content = m['content'] ?? '';
-        final trunc =
-            content.length > 300 ? '${content.substring(0, 300)}...' : content;
-        buf.write(
-            '<|start_header_id|>${m['role'] ?? 'user'}<|end_header_id|>\n\n$trunc<|eot_id|>');
-      }
-    }
-    buf.write(
-        '<|start_header_id|>user<|end_header_id|>\n\n$msg<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n');
-    return buf.toString();
   }
 }

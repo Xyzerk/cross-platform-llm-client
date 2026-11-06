@@ -1,10 +1,11 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'llama_api.dart';
+import 'llama_host.dart';
 
 /// User-friendly controller for llama.cpp
 class LlamaController implements LlamaFlutterApi {
-  final _api = LlamaHostApi();
+  late final LlamaHost _api;
   StreamController<String>? _tokenController;
   final _progressController = StreamController<double>.broadcast();
   
@@ -12,6 +13,12 @@ class LlamaController implements LlamaFlutterApi {
   bool _isGenerating = false;
 
   LlamaController({BinaryMessenger? binaryMessenger}) {
+    _api = createLlamaHost(LlamaHostEvents(
+      onToken: onToken,
+      onDone: onDone,
+      onError: onError,
+      onLoadProgress: onLoadProgress,
+    ));
     LlamaFlutterApi.setUp(
       this,
       binaryMessenger: binaryMessenger,

@@ -161,6 +161,8 @@ endif()
 # JNI wrapper library - simplified without common library
 add_library(llama_jni SHARED
     src/main/cpp/jni_wrapper.cpp
+    ../src/plm_core.cpp
+    ../src/plm_engine.cpp
 )
 
 target_link_libraries(llama_jni
@@ -180,4 +182,5 @@ endif()
 target_include_directories(llama_jni PRIVATE
     src/main/cpp/llama.cpp/include
     src/main/cpp/llama.cpp/ggml/include
+    ../src
 )
