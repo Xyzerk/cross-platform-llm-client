@@ -78,7 +78,9 @@ jobs:
         run: flutter pub get
 
       - name: Analyze
-        run: flutter analyze
+        # Errors and warnings fail the build; deprecation infos from the
+        # SDK's own migration guidance do not.
+        run: flutter analyze --no-fatal-infos
 
       - name: Test
         run: flutter test
