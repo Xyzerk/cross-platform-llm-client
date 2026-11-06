@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:path/path.dart' as p;
 import '../services/download_service.dart';
 import '../services/gguf_metadata.dart';
 import '../services/inference_service.dart';
@@ -68,6 +69,14 @@ class ModelController extends GetxController {
   /// Apple Neural Engine (Core ML) models are only usable on Apple devices.
   static bool get supportsAppleNpu => Platform.isIOS || Platform.isMacOS;
 
+  /// Windows runs GGUF through llama.cpp only; LiteRT and Stable Diffusion
+  /// models have no Windows runtime.
+  static bool get isWindows => Platform.isWindows;
+
+  /// Local image generation needs stable-diffusion.cpp, which is Android/iOS
+  /// only for now.
+  static bool get supportsImageModels => !isWindows;
+
   static const localFilters = [
     'general',
     'image',
@@ -80,6 +89,7 @@ class ModelController extends GetxController {
     // Loading a model doesn't move it: the list keeps its normal order and
     // the loaded model is marked in place.
     final models = [...availableModels];
+    if (isWindows) models.removeWhere((m) => !isLlamaModel(m));
     models.sort((a, b) {
       final aDownloaded = isDownloaded(a.filename);
       final bDownloaded = isDownloaded(b.filename);
@@ -143,6 +153,8 @@ class ModelController extends GetxController {
         .map((m) => AiModel.fromMap(m))
         // Core ML (Apple NPU) models only run on iOS/macOS.
         .where((m) => supportsAppleNpu || !isNpuModel(m))
+        // Windows has no LiteRT or Stable Diffusion runtime.
+        .where((m) => !isWindows || isLlamaModel(m))
         .toList()
       ..addAll(customModels);
     refreshDownloaded();
@@ -185,6 +197,7 @@ class ModelController extends GetxController {
       return m.filename;
     }).toSet();
     for (final file in files) {
+      if (isWindows && !file.toLowerCase().endsWith('.gguf')) continue;
       if (!existingFilenames.contains(file)) {
         // An imported copy of a catalogue vision model (any capitalisation,
         // e.g. the original Hugging Face name) keeps the catalogue's vision
@@ -1143,6 +1156,12 @@ class ModelController extends GetxController {
         final filename = picked.name;
         final lower = filename.toLowerCase();
 
+        if (isWindows && !lower.endsWith('.gguf')) {
+          showToast('Unsupported Model',
+              'Windows can only run GGUF models. Import a .gguf file.',
+              tone: ToastTone.warning);
+          return;
+        }
         if (!lower.endsWith('.gguf') &&
             !lower.endsWith('.litertlm') &&
             !lower.endsWith('.safetensors')) {
@@ -1175,7 +1194,7 @@ class ModelController extends GetxController {
         }
 
         final modelsDir = await _download.modelsDir;
-        final destPath = '$modelsDir/$filename';
+        final destPath = p.join(modelsDir, filename);
         final partPath = '$destPath.part';
         partialImportPath = partPath;
         final destFile = File(destPath);
@@ -1422,7 +1441,7 @@ class ModelController extends GetxController {
         if (lower.endsWith('.download')) {
           final target = name.substring(0, name.length - '.download'.length);
           if (busy.contains(target)) continue;
-          if (await File('${dir.path}/$target').exists()) await entity.delete();
+          if (await File(p.join(dir.path, target)).exists()) await entity.delete();
           continue;
         }
         if (!lower.endsWith('.part')) continue;

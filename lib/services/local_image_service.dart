@@ -3,6 +3,7 @@ import 'dart:io' show File, Platform;
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:image/image.dart' as img;
+import 'package:path/path.dart' as p;
 import 'package:sd_flutter_android/sd_flutter_android.dart';
 import '../core/constants.dart';
 import '../core/ui.dart';
@@ -12,6 +13,10 @@ import 'hive_service.dart';
 import 'sd_isolate_processor.dart';
 
 class LocalImageService extends GetxService {
+  /// Stable Diffusion models run on Android and iOS only; Windows has no
+  /// stable-diffusion.cpp build yet.
+  static bool get isSupported => !Platform.isWindows;
+
   final HiveService _hive = Get.find<HiveService>();
 
   final isModelLoaded = false.obs;
@@ -138,6 +143,9 @@ class LocalImageService extends GetxService {
 
   Future<String> loadModel(String modelPath,
       {String? modelName, String? taesdPath}) async {
+    if (!isSupported) {
+      return 'Local image generation is not available on Windows.';
+    }
     if (isLoadingModel.value) return 'ERROR: Model is already loading.';
     if (_nativeJobRunning) {
       return 'ERROR: An image is still generating. Wait for it to finish, '
@@ -149,7 +157,7 @@ class LocalImageService extends GetxService {
         await unloadModel();
       }
 
-      loadingModelName.value = modelName ?? modelPath.split('/').last;
+      loadingModelName.value = modelName ?? p.basename(modelPath);
       isLoadingModel.value = true;
       progress.value = 0.0;
 
@@ -188,7 +196,7 @@ class LocalImageService extends GetxService {
             isUsingGpu.value = true;
             isModelLoaded.value = true;
             isLoadingModel.value = false;
-            loadedModelName.value = modelName ?? modelPath.split('/').last;
+            loadedModelName.value = modelName ?? p.basename(modelPath);
             await _hive.setSetting(AppConstants.keyImageModelPath, modelPath);
             await _hive.setSetting(
                 AppConstants.keyImageModelName, loadedModelName.value);
@@ -216,7 +224,7 @@ class LocalImageService extends GetxService {
           isUsingGpu.value = true;
           isModelLoaded.value = true;
           isLoadingModel.value = false;
-          loadedModelName.value = modelName ?? modelPath.split('/').last;
+          loadedModelName.value = modelName ?? p.basename(modelPath);
           await _hive.setSetting(AppConstants.keyImageModelPath, modelPath);
           await _hive.setSetting(
               AppConstants.keyImageModelName, loadedModelName.value);
@@ -298,7 +306,7 @@ class LocalImageService extends GetxService {
         isUsingGpu.value = backend != Backend.cpu;
         isModelLoaded.value = true;
         isLoadingModel.value = false;
-        loadedModelName.value = modelName ?? modelPath.split('/').last;
+        loadedModelName.value = modelName ?? p.basename(modelPath);
         await _hive.setSetting(AppConstants.keyImageModelPath, modelPath);
         await _hive.setSetting(
             AppConstants.keyImageModelName, loadedModelName.value);
@@ -314,14 +322,14 @@ class LocalImageService extends GetxService {
       Get.find<AppLogService>().error(
         'Image model load failed',
         details:
-            'All backend candidates failed. model=${modelName ?? modelPath.split('/').last}, vendor=$vendor, sizeMb=$modelSizeMb',
+            'All backend candidates failed. model=${modelName ?? p.basename(modelPath)}, vendor=$vendor, sizeMb=$modelSizeMb',
       );
       return 'Could not load this model. Try CyberRealistic, Realistic Vision, or AbsoluteReality - these work reliably on most devices.\n\nTechnical detail: All backend candidates failed.';
     } catch (e) {
       isModelLoaded.value = false;
       isLoadingModel.value = false;
       Get.find<AppLogService>().error('Image model load exception',
-          details: 'model=${modelName ?? modelPath.split('/').last}, error=$e');
+          details: 'model=${modelName ?? p.basename(modelPath)}, error=$e');
       return 'Could not load this model. Try CyberRealistic, Realistic Vision, or AbsoluteReality - these work reliably on most devices.\n\nTechnical detail: $e';
     }
   }

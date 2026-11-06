@@ -103,15 +103,16 @@ class SettingsView extends GetView<SettingsController> {
                 },
                 builder: (ctx) => _buildLiteRtGroup(ctx),
               ),
-              _navRow(
-                context,
-                icon: Icons.image_outlined,
-                title: 'Image generation',
-                value: controller.imageGenBackend.value == Backend.cpu
-                    ? 'CPU'
-                    : 'GPU',
-                builder: (ctx) => _buildImageGenerationGroup(ctx),
-              ),
+              if (LocalImageService.isSupported)
+                _navRow(
+                  context,
+                  icon: Icons.image_outlined,
+                  title: 'Image generation',
+                  value: controller.imageGenBackend.value == Backend.cpu
+                      ? 'CPU'
+                      : 'GPU',
+                  builder: (ctx) => _buildImageGenerationGroup(ctx),
+                ),
               if (Get.isRegistered<ClusterService>())
                 AppRow(
                   icon: Icons.hub_outlined,
@@ -130,6 +131,14 @@ class SettingsView extends GetView<SettingsController> {
             const SectionHeader('About'),
             AppGroup(dividerIndent: 60, children: [
               if (showUpdates) _buildUpdatesRow(context),
+              if (!showUpdates && ClusterService.isDesktop)
+                const AppRow(
+                  icon: Icons.open_in_new_rounded,
+                  title: 'Releases',
+                  subtitle: 'Download the latest version from GitHub',
+                  chevron: true,
+                  onTap: UpdateService.openReleasesPage,
+                ),
               _navRow(
                 context,
                 icon: Icons.smartphone_rounded,

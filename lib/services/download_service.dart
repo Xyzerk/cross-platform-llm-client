@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
+import 'package:path/path.dart' as p;
 import '../controllers/model_controller.dart';
 import '../core/ui.dart';
 import 'update_service.dart';
@@ -54,7 +55,7 @@ class DownloadService extends GetxService with WidgetsBindingObserver {
   Future<String> get modelsDir async => await platform_dl.getModelsDir();
 
   Future<String> modelPath(String filename) async {
-    return '${await modelsDir}/$filename';
+    return p.join(await modelsDir, filename);
   }
 
   Future<bool> isModelDownloaded(String filename) async {

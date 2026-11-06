@@ -1,12 +1,13 @@
 # Building PrivateLM for Windows
 
-Phases 0–5 are done: the runner, window sizing, the FFI plugin target, the
+Phases 0–6 are done: the runner, window sizing, the FFI plugin target, the
 build script, the real engine — `llama_flutter_android.dll` embeds a static
 llama.cpp (CPU + RPC + mtmd, the same tree the Android build compiles) — the
 Dart Windows inference host, the cluster transport abstraction,
 `privatelm_rpc_worker.exe`, which lets an Android/iOS master use this PC as a
-cluster worker, and the master side, which spreads a model across phone
-workers. Standalone Windows chat with a GGUF model works through the C ABI in
+cluster worker, the master side, which spreads a model across phone workers,
+and the platform guards that keep mobile-only features from breaking on
+Windows. Standalone Windows chat with a GGUF model works through the C ABI in
 `local_plugins/llama_flutter_android/windows/include/llama_ffi.h`. Vulkan/GPU
 inference (Phase 2c) is the remaining item. See
 [windows-port-plan.md](windows-port-plan.md) for the full roadmap.
@@ -315,6 +316,39 @@ the monitor work area so its frame never lands off-screen on small displays.
 - `test/windows_master_test.dart` starts the real worker, plans a load onto it
   and checks that llama.cpp's RPC client connects, using a metadata-only GGUF
   stub so no model file is needed. It skips when the app has not been built.
+
+## What Phase 6 includes
+
+- **Paths** — filenames come from `p.basename` and directories from `p.join`
+  in `download_native.dart`, `download_service.dart`, `model_controller.dart`,
+  `chat_controller.dart`, `local_image_service*.dart`,
+  `openai_server_service_io.dart` and `image_viewer.dart`. Windows drive
+  letters, backslashes and spaces in `%USERPROFILE%\Documents\PrivateLM\models`
+  all work; model imports keep their plain filenames in the list.
+- **GGUF only** — on Windows the model list and import picker drop `.litertlm`
+  and `.safetensors` (Core ML was already Apple-only), and the Image filter
+  chip is hidden. The catalog still shows every GGUF chat/vision model.
+- **Local image generation** — `LocalImageService.loadModel` returns
+  "Local image generation is not available on Windows" before constructing
+  `SdIsolateProcessor`, and Settings hides the image-generation section.
+- **Updates** — `UpdateService` remains Android-only. On Windows, Settings
+  shows a **Releases** row that opens the GitHub release page in the default
+  browser instead of an in-app APK update.
+- **Crash reporting** — `CrashReportingService` disables itself on Windows
+  (Crashlytics has no Windows implementation) instead of failing through a
+  missing method channel. Builds still work without `google-services.json`.
+- **Plugins** — the cluster screen only builds `mobile_scanner` when
+  `canScanQr` is true; the chat mic becomes an inert send glyph when
+  `speech_to_text` is unavailable; `flutter_local_notifications` init is a
+  no-op outside Android/iOS; `gal` is replaced by a `file_picker` save dialog
+  in the image viewer; `permission_handler` calls stay behind
+  `Platform.isAndroid`; `firebase_messaging` and `flutter_inappwebview` are
+  not used on the Windows path.
+- **OpenAI server** — `openai_server_service_io.dart` is plain `dart:io` and
+  binds/serves on Windows; `test/openai_server_service_test.dart` exercises it
+  on every `flutter test` run.
+- `test/download_native_test.dart` now checks that downloaded models are
+  listed by basename when the models directory contains spaces.
 
 ## What is not here yet
 

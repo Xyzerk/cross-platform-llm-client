@@ -25,6 +25,13 @@ class CrashReportingService extends GetxService {
   bool get isEnabled => _enabled;
 
   Future<CrashReportingService> init() async {
+    // firebase_crashlytics has no Windows implementation; keep it disabled
+    // instead of failing through the plugin's missing method channel.
+    if (Platform.isWindows) {
+      // ignore: avoid_print
+      print('[CrashReporting] Disabled: Crashlytics does not support Windows');
+      return this;
+    }
     try {
       if (Firebase.apps.isEmpty) {
         await Firebase.initializeApp();

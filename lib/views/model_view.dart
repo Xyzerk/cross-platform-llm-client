@@ -118,7 +118,7 @@ class ModelView extends GetView<ModelController> {
   Widget _buildLocalFilterChips(BuildContext context) {
     final labels = [
       ('general', 'Chat'),
-      ('image', 'Image'),
+      if (ModelController.supportsImageModels) ('image', 'Image'),
       ('uncensored', 'Uncensored'),
       ('vision', 'Vision'),
       if (ModelController.supportsAppleNpu) ('npu', 'Apple NPU'),
@@ -141,7 +141,9 @@ class ModelView extends GetView<ModelController> {
     showAppSheet<void>(
       context,
       title: 'Import model',
-      subtitle: 'Add .gguf, .litertlm or .safetensors files from your phone.',
+      subtitle: ModelController.isWindows
+          ? 'Add a .gguf model from this PC.'
+          : 'Add .gguf, .litertlm or .safetensors files from your phone.',
       builder: (ctx) => AppGroup(dividerIndent: 60, children: [
         AppRow(
           icon: Icons.insert_drive_file_outlined,
@@ -173,7 +175,9 @@ class ModelView extends GetView<ModelController> {
     if (files == null || !context.mounted) return;
     if (files.isEmpty) {
       showToast('No models found',
-          'That folder has no .gguf, .litertlm or .safetensors files.',
+          ModelController.isWindows
+              ? 'That folder has no .gguf files.'
+              : 'That folder has no .gguf, .litertlm or .safetensors files.',
           tone: ToastTone.warning);
       return;
     }

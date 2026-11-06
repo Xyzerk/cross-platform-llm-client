@@ -1023,6 +1023,12 @@ class ChatView extends GetView<ChatController> {
                       bgColor = _appleBlue(context);
                       iconData = Icons.arrow_upward_rounded;
                       onTap = controller.sendMessage;
+                    } else if (Platform.isWindows &&
+                        !controller.sttAvailable.value) {
+                      // No speech recognition on Windows: inert send glyph
+                      bgColor = Colors.transparent;
+                      iconData = Icons.arrow_upward_rounded;
+                      onTap = null;
                     } else {
                       // Empty → bare mic glyph
                       bgColor = Colors.transparent;

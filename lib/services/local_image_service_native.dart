@@ -3,6 +3,7 @@ import 'dart:io' show File, Platform;
 import 'dart:typed_data';
 import 'package:get/get.dart';
 import 'package:image/image.dart' as img;
+import 'package:path/path.dart' as p;
 import 'package:sd_flutter_android/sd_flutter_android.dart';
 import '../core/constants.dart';
 import '../ffi/sd_ffi_bindings.dart';
@@ -236,7 +237,7 @@ class LocalImageService extends GetxService {
         isUsingGpu.value = backend != Backend.cpu;
         isModelLoaded.value = true;
         isLoadingModel.value = false;
-        loadedModelName.value = modelName ?? modelPath.split('/').last;
+        loadedModelName.value = modelName ?? p.basename(modelPath);
         await _hive.setSetting(AppConstants.keyImageModelPath, modelPath);
         await _hive.setSetting(
             AppConstants.keyImageModelName, loadedModelName.value);
@@ -252,7 +253,7 @@ class LocalImageService extends GetxService {
       Get.find<AppLogService>().error(
         'Image model load failed',
         details:
-            'All backend candidates failed. model=${modelName ?? modelPath.split('/').last}, vendor=$vendor, sizeMb=$modelSizeMb',
+            'All backend candidates failed. model=${modelName ?? p.basename(modelPath)}, vendor=$vendor, sizeMb=$modelSizeMb',
       );
       return 'Could not load this model. Try CyberRealistic, Realistic Vision, or AbsoluteReality - these work reliably on most devices.\n\nTechnical detail: All backend candidates failed.';
     } catch (e) {
@@ -260,7 +261,7 @@ class LocalImageService extends GetxService {
       isLoadingModel.value = false;
       Get.find<AppLogService>().error('Image model load exception',
           details:
-              'model=${modelName ?? modelPath.split('/').last}, error=$e');
+              'model=${modelName ?? p.basename(modelPath)}, error=$e');
       return 'Could not load this model. Try CyberRealistic, Realistic Vision, or AbsoluteReality - these work reliably on most devices.\n\nTechnical detail: $e';
     }
   }

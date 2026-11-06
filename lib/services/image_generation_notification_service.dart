@@ -18,6 +18,9 @@ class ImageGenerationNotificationService {
 
   Future<void> init() async {
     if (_initialized) return;
+    // flutter_local_notifications has no Windows implementation; the rest of
+    // the service is Android-only anyway.
+    if (!Platform.isAndroid && !Platform.isIOS) return;
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const darwin = DarwinInitializationSettings(
       requestAlertPermission: false,

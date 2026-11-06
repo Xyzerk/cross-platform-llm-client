@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:gal/gal.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -41,6 +43,22 @@ class _ImageViewerState extends State<ImageViewer> {
   Future<void> _download() async {
     setState(() => _isSaving = true);
     try {
+      if (Platform.isWindows) {
+        // Windows has no gallery: let the user choose where to save instead.
+        final path = await FilePicker.saveFile(
+          dialogTitle: 'Save image',
+          fileName:
+              'privatelm_${DateTime.now().millisecondsSinceEpoch}.png',
+          type: FileType.image,
+        );
+        if (path == null) return;
+        await File(path).writeAsBytes(_bytes, flush: true);
+        if (mounted) {
+          showToast('Saved', 'Image saved to your PC',
+              tone: ToastTone.success, duration: const Duration(seconds: 2));
+        }
+        return;
+      }
       // Request permission if needed
       final hasAccess = await Gal.hasAccess();
       if (!hasAccess) {
@@ -70,7 +88,7 @@ class _ImageViewerState extends State<ImageViewer> {
     try {
       final tempDir = await getTemporaryDirectory();
       final fileName = 'privatelm_${DateTime.now().millisecondsSinceEpoch}.png';
-      final file = File('${tempDir.path}/$fileName');
+      final file = File(p.join(tempDir.path, fileName));
       await file.writeAsBytes(_bytes);
       await Share.shareXFiles(
         [XFile(file.path)],

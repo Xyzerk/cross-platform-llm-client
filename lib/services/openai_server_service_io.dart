@@ -5,6 +5,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:get/get.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../controllers/settings_controller.dart';
@@ -481,7 +482,7 @@ class OpenAiServerService {
     }
     final ext = _extensionForMime(meta, kind);
     final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/server_${kind}_${_id()}.$ext');
+    final file = File(p.join(dir.path, 'server_${kind}_${_id()}.$ext'));
     await file.writeAsBytes(bytes, flush: true);
     return _TempFileResult(file);
   }

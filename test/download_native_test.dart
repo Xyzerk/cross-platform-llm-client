@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:privatelm/services/download_native.dart';
 
 /// Serves [body] slowly in small chunks, optionally honouring Range requests,
@@ -61,6 +62,17 @@ void main() {
   });
 
   tearDown(() => dir.delete(recursive: true));
+
+  test('lists downloaded models by basename, not by splitting on "/"', () async {
+    // Windows paths use backslashes and may contain spaces; the model list
+    // must still show plain filenames.
+    final models = Directory(p.join(dir.path, 'my models'));
+    await models.create();
+    await File(p.join(models.path, 'tiny.gguf')).writeAsBytes([0]);
+    await File(p.join(models.path, 'notes.txt')).writeAsString('not a model');
+
+    expect(await getDownloadedModels(models.path), ['tiny.gguf']);
+  });
 
   test('downloads a file from scratch', () async {
     final server = _FileServer(body);

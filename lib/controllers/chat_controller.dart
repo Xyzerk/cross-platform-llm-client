@@ -8,6 +8,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:get/get.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:uuid/uuid.dart';
@@ -484,7 +485,8 @@ class ChatController extends GetxController {
       if (fallbackPath != null && fallbackPath.isNotEmpty) return fallbackPath;
       final tempDir = await getTemporaryDirectory();
       final failedDecodeFile = File(
-        '${tempDir.path}/ai_chat_image_${DateTime.now().millisecondsSinceEpoch}_$originalName',
+        p.join(tempDir.path,
+            'ai_chat_image_${DateTime.now().millisecondsSinceEpoch}_$originalName'),
       );
       await failedDecodeFile.writeAsBytes(bytes, flush: false);
       return failedDecodeFile.path;
@@ -498,7 +500,8 @@ class ChatController extends GetxController {
 
     final tempDir = await getTemporaryDirectory();
     final file = File(
-      '${tempDir.path}/ai_chat_vision_${DateTime.now().millisecondsSinceEpoch}.jpg',
+      p.join(tempDir.path,
+          'ai_chat_vision_${DateTime.now().millisecondsSinceEpoch}.jpg'),
     );
     await file.writeAsBytes(resized, flush: false);
     return file.path;

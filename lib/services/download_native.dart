@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/services.dart';
 import 'package:archive/archive_io.dart';
@@ -10,7 +11,7 @@ const _channel = MethodChannel('com.aichat.ai_chat/model_import');
 
 Future<String> getModelsDir() async {
   final dir = await getApplicationDocumentsDirectory();
-  final modelsPath = '${dir.path}/models';
+  final modelsPath = p.join(dir.path, 'models');
   await Directory(modelsPath).create(recursive: true);
   return modelsPath;
 }
@@ -31,7 +32,7 @@ Future<List<String>> getDownloadedModels(String modelsDir) async {
           f.path.endsWith('.coreml') ||
           f.path.endsWith('.mlpackage') ||
           f.path.endsWith('.mlmodelc'))
-      .map((f) => f.path.split('/').last)
+      .map((f) => p.basename(f.path))
       .toList();
 }
 
@@ -113,7 +114,7 @@ Future<String> downloadModel({
 }) async {
   final partial = File('$savePath$partialDownloadSuffix');
   final cancelToken = CancelToken();
-  final filename = savePath.split('/').last;
+  final filename = p.basename(savePath);
   _cancelTokens[filename] = cancelToken;
   RandomAccessFile? sink;
 
