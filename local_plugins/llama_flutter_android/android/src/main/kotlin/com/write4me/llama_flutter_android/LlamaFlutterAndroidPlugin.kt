@@ -499,7 +499,13 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi, ActivityAware {
         if (name.contains("powervr") || name.contains("img ")) return true
         if (name.contains("mali-t")) return true  // Midgard (pre-2016)
         val adreno = Regex("adreno.*?(\\d{3})").find(name)
-        if (adreno != null) return adreno.groupValues[1].toInt() < 640
+        if (adreno != null) {
+            val model = adreno.groupValues[1].toInt()
+            if (model < 640) return true
+            // Adreno 710 (Snapdragon 6/7s Gen) faults during llama_decode and
+            // then crashes inside the driver's vkGetDeviceFaultInfoEXT.
+            if (model == 710) return true
+        }
         return false
     }
 
