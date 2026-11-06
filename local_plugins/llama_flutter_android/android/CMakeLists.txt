@@ -87,6 +87,22 @@ endif()
         PATHS /usr/bin /usr/local/bin NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
     find_program(_host_cxx NAMES clang++ g++ c++
         PATHS /usr/bin /usr/local/bin NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+    # CMake rejects Windows backslashes in quoted strings ("Invalid character
+    # escape '\U'"), so hand the generated toolchain forward slashes. On
+    # Windows the two find_program calls above miss (there is no /usr/bin),
+    # and the host tool then builds with the compiler CMake detects itself,
+    # so only pin the compilers when they were actually found.
+    file(TO_CMAKE_PATH "${CMAKE_MAKE_PROGRAM}" _vk_make_program)
+    set(_vk_host_cc_line "")
+    if(_host_cc)
+        file(TO_CMAKE_PATH "${_host_cc}" _host_cc)
+        set(_vk_host_cc_line "set(CMAKE_C_COMPILER \"${_host_cc}\")")
+    endif()
+    set(_vk_host_cxx_line "")
+    if(_host_cxx)
+        file(TO_CMAKE_PATH "${_host_cxx}" _host_cxx)
+        set(_vk_host_cxx_line "set(CMAKE_CXX_COMPILER \"${_host_cxx}\")")
+    endif()
     set(_vk_host_tc "${CMAKE_BINARY_DIR}/vk-shaders-gen-host-toolchain.cmake")
     file(WRITE "${_vk_host_tc}"
 "set(CMAKE_BUILD_TYPE Release)
@@ -95,9 +111,9 @@ set(CMAKE_CXX_FLAGS -O2)
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE NEVER)
-set(CMAKE_C_COMPILER \"${_host_cc}\")
-set(CMAKE_CXX_COMPILER \"${_host_cxx}\")
-set(CMAKE_MAKE_PROGRAM \"${CMAKE_MAKE_PROGRAM}\" CACHE FILEPATH \"\")
+${_vk_host_cc_line}
+${_vk_host_cxx_line}
+set(CMAKE_MAKE_PROGRAM \"${_vk_make_program}\" CACHE FILEPATH \"\")
 ")
     set(GGML_VULKAN_SHADERS_GEN_TOOLCHAIN "${_vk_host_tc}" CACHE FILEPATH "" FORCE)
 

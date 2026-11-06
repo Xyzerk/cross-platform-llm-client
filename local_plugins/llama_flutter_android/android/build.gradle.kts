@@ -85,6 +85,19 @@ android {
         cmake {
             path = file("CMakeLists.txt")
             version = "3.22.1"
+            // Windows MAX_PATH: the Vulkan shader generator is built as an
+            // ExternalProject whose own build/object paths add ~150 chars,
+            // and CMake caps object paths at 250. The default staging dir is
+            // already 117 chars deep here, so point the whole native tree at
+            // a short path. Override with PRIVATELM_LLAMA_CXX_DIR if needed.
+            buildStagingDirectory = file(
+                System.getenv("PRIVATELM_LLAMA_CXX_DIR")
+                    ?: if (System.getProperty("os.name").startsWith("Windows")) {
+                        "${System.getProperty("user.home").replace('\\', '/')}/pl-cxx/llama"
+                    } else {
+                        "${layout.buildDirectory.get().asFile}/cxx"
+                    }
+            )
         }
     }
 
