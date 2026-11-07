@@ -9,6 +9,7 @@
 // file (and its two implementations) imports a platform-specific cluster API.
 library;
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:llama_flutter_android/llama_flutter_android.dart';
 
 import 'cluster_backend_stub.dart'
@@ -20,8 +21,14 @@ abstract class ClusterBackend {
   /// The port llama.cpp's RPC server listens on, on every platform.
   static const int defaultPort = 50052;
 
+  /// Test seam: while set, [instance] returns this instead of the platform
+  /// backend. Tests set it to a fake and restore it to null in teardown.
+  @visibleForTesting
+  static ClusterBackend? overrideForTesting;
+
   /// The backend for the platform this build runs on.
-  static ClusterBackend get instance => createClusterBackend();
+  static ClusterBackend get instance =>
+      overrideForTesting ?? createClusterBackend();
 
   /// Starts serving this device's CPU to a master.
   ///

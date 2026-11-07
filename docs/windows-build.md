@@ -1,16 +1,17 @@
 # Building PrivateLM for Windows
 
-Phases 0–6 are done: the runner, window sizing, the FFI plugin target, the
+Phases 0–7 are done: the runner, window sizing, the FFI plugin target, the
 build script, the real engine — `llama_flutter_android.dll` embeds a static
 llama.cpp (CPU + RPC + mtmd, the same tree the Android build compiles) — the
 Dart Windows inference host, the cluster transport abstraction,
 `privatelm_rpc_worker.exe`, which lets an Android/iOS master use this PC as a
 cluster worker, the master side, which spreads a model across phone workers,
-and the platform guards that keep mobile-only features from breaking on
-Windows. Standalone Windows chat with a GGUF model works through the C ABI in
-`local_plugins/llama_flutter_android/windows/include/llama_ffi.h`. Vulkan/GPU
-inference (Phase 2c) is the remaining item. See
-[windows-port-plan.md](windows-port-plan.md) for the full roadmap.
+the platform guards that keep mobile-only features from breaking on Windows,
+opt-in Vulkan/GPU inference, and the tests/packaging/docs baseline. Standalone
+Windows chat with a GGUF model works through the C ABI in
+`local_plugins/llama_flutter_android/windows/include/llama_ffi.h`. See
+[windows-port-plan.md](windows-port-plan.md) for the roadmap and
+[windows-cluster.md](windows-cluster.md) for cluster setup and troubleshooting.
 
 ## Prerequisites
 
@@ -20,7 +21,8 @@ inference (Phase 2c) is the remaining item. See
   - `Microsoft.VisualStudio.Component.VC.Tools.x86.x64` — MSVC toolset (v143)
   - `Microsoft.VisualStudio.Component.VC.CMake.Project` — C++ CMake tools
   - `Microsoft.VisualStudio.Component.Windows11SDK.26100` — Windows SDK
-- Optional: Vulkan SDK, only when GPU inference is enabled later
+- Optional: Vulkan SDK, only for GPU inference (`-Vulkan`, Phase 2c). The
+  default build is CPU-only and does not need it.
 
 Flutter resolves CMake from a fixed path inside the Visual Studio installation:
 
@@ -172,6 +174,19 @@ powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
 powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1 -Mode release
 ```
 
+Add `-Vulkan` to compile the GPU backend, and `-Package` to zip the runner
+output with the version from `pubspec.yaml`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1 -Mode release -Vulkan -Package
+# build\windows\privatelm-1.0.7-7-windows-x64.zip
+```
+
+`-Vulkan` sets `PRIVATELM_WINDOWS_VULKAN=1` for the build. You can also set
+that variable by hand before `flutter build windows`. The zip contains
+`privatelm.exe`, `flutter_windows.dll`, `llama_flutter_android.dll`,
+`privatelm_rpc_worker.exe` and `data/`.
+
 The executable is written to:
 
 ```
@@ -203,8 +218,9 @@ the monitor work area so its frame never lands off-screen on small displays.
   (`plm_load_model`, `plm_generate`, `plm_stop`, `plm_unload`, …) from
   `llama_flutter_android.dll`.
 - The Windows build compiles the plugin's llama.cpp tree statically
-  (`GGML_RPC=ON`, mtmd ON, Vulkan off — deferred to Phase 2c), so the only
-  bundled artifact is `llama_flutter_android.dll` itself.
+  (`GGML_RPC=ON`, mtmd ON). Vulkan is opt-in since Phase 2c (see below), so the
+  default build is CPU-only and bundles only `llama_flutter_android.dll` plus
+  the worker exe.
   - llama.cpp's own unconditional `install()` rules must be severed from
     Flutter's INSTALL step: llama.cpp targets resolve destinations like
     `${CMAKE_INSTALL_PREFIX}/lib` at *install-script runtime*, where the
@@ -247,8 +263,9 @@ the monitor work area so its frame never lands off-screen on small displays.
   `supportsLocalInference` includes Windows; thread count follows
   `Platform.numberOfProcessors` (capped at 16); `.litertlm` and `.safetensors`
   are rejected with clear messages.
-- `inference_service.dart` uses `p.basename` for model names, so Windows paths
-  with backslashes and drive letters work.
+- `inference_service.dart` uses `lib/core/path_helpers.dart` for model names,
+  so Windows paths with backslashes and drive letters work even when the path
+  came from another platform.
 - C ABI additions: `plm_generate` takes an optional `image_path` (vision
   turns), and `plm_clear_context` was added.
 - `test/chat_templates_test.dart` covers prompt parity with the Kotlin
@@ -350,9 +367,65 @@ the monitor work area so its frame never lands off-screen on small displays.
 - `test/download_native_test.dart` now checks that downloaded models are
   listed by basename when the models directory contains spaces.
 
+## What Phase 2c includes (Vulkan/GPU, opt-in)
+
+- The plugin's CMake reads `PRIVATELM_WINDOWS_VULKAN`. When set it finds the
+  Vulkan SDK through `VULKAN_SDK`, `Vulkan_ROOT`, or the newest
+  `%ProgramFiles%\VulkanSDK\*`, then builds `ggml-vulkan` statically into
+  `llama_flutter_android.dll`. The environment variable is authoritative on
+  every configure, so unsetting it returns to a CPU-only build. The default
+  build leaves it off and needs neither the SDK nor `vulkan-1.dll` at runtime.
+- `plm::probeLinkedGpuBackend()` marks the statically linked backend as loaded
+  before `detectGpu()` runs; Android keeps loading `libggml-vulkan.so` itself.
+- If the app asks for GPU layers but `firstLocalGpuDevice()` is null (CPU-only
+  build, no Vulkan ICD, driver without Vulkan, or backend init failure),
+  `loadModel` logs it and loads on the CPU instead of failing. That is the
+  fallback required by the plan's risk table.
+- This machine (Intel HD Graphics, driver 8.15.10.2900) has no Vulkan ICD, so
+  the Vulkan build is verified to compile, link and fall back to the CPU; GPU
+  offload itself needs a machine with a Vulkan device.
+
+## What Phase 7 includes
+
+- `lib/services/cluster_planner.dart` holds the split planning
+  (`fillFastestFirst`, `splitBySpeed`, `formatGb`) outside `ClusterService`, so
+  it is testable without GetX.
+- `lib/core/path_helpers.dart` extracts model names/extensions from both
+  `\` and `/` paths.
+- `ClusterBackend.overrideForTesting` and `LlamaController(host: …)` are test
+  seams; `test/cluster_backend_test.dart` (Windows only) and
+  `local_plugins/llama_flutter_android/test/llama_controller_test.dart` use
+  them.
+- `scripts/build_windows.ps1 -Package` writes the portable zip, and
+  [windows-cluster.md](windows-cluster.md) documents firewall, private network,
+  manual IP, QR and troubleshooting.
+
 ## What is not here yet
 
-- Vulkan/GPU inference on Windows (Phase 2c)
+- LiteRT-LM (`.litertlm`) and local Stable Diffusion (`.safetensors`) on
+  Windows; Windows ARM64; iOS as a cluster master; MSIX/code signing; in-app
+  auto-update (Settings links to GitHub releases).
+- GPU offload on machines without a Vulkan-capable driver: the build falls back
+  to the CPU.
+
+## Old GPUs and the black window
+
+Flutter 3.47.x's Windows compositor passes a sized GL internal format
+(`GL_RGBA8`, …) to `glTexImage2D` while running on an OpenGL ES 2.0 context.
+ANGLE on D3D11 feature level 10_0 only offers ES 2.0, so the call fails with
+`GL_INVALID_VALUE`, the framebuffer is incomplete, and the window stays black.
+The fix (`flutter/flutter#192917`, issue `#191978`) is on master and in the
+3.50 beta, but not in 3.47.4 or 3.47.9.
+
+`windows/runner/main.cpp` works around it: at startup it probes
+`D3D11CreateDevice` and, when the GPU cannot do feature level 11_0, sets
+`ANGLE_FEATURE_OVERRIDES_ENABLED=allowES3OnFL100`. That lets ANGLE create an
+ES 3.0 context on FL10_0, and the compositor's ES 3 call succeeds. Newer GPUs
+keep the default path. An override you set by hand always wins.
+
+You can verify the workaround is active by running the app from a terminal: a
+non-black window means it applied. If you build with a Flutter version that has
+the upstream fix, the probe is harmless and the app still renders.
 
 ## What Phase 0 includes
 

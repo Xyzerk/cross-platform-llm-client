@@ -120,4 +120,10 @@ std::string consumeLoadError();
 /// Cluster workers show up as GPU devices named "RPC<n>"; they never count.
 ggml_backend_dev_t firstLocalGpuDevice();
 
+/// Marks the GPU backend as loaded when this build statically links it
+/// (Windows Vulkan builds register it before main). Android loads Vulkan as a
+/// separate .so and sets the flag itself. Returns whether a GPU backend is
+/// available; never initialises Vulkan.
+bool probeLinkedGpuBackend();
+
 } // namespace plm

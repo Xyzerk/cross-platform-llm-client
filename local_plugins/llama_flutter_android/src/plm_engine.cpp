@@ -256,7 +256,16 @@ std::string loadModel(const char* model_path, int n_threads, int ctx_size,
     static ggml_backend_dev_t no_gpu_devices[] = {nullptr};
     // Otherwise name the local GPU explicitly: once cluster workers are
     // registered, llama.cpp's default device list would include them too.
-    ggml_backend_dev_t local_gpu_devices[] = {firstLocalGpuDevice(), nullptr};
+    ggml_backend_dev_t local_gpu = firstLocalGpuDevice();
+    if (n_gpu_layers > 0 && !local_gpu) {
+        // The app asked for GPU layers, but this build has no GPU backend, the
+        // machine has no usable Vulkan device, or the backend failed to
+        // initialise. Run on the CPU rather than failing the load.
+        logInfo("No GPU device available; loading on the CPU");
+        n_gpu_layers = 0;
+        model_params.n_gpu_layers = 0;
+    }
+    ggml_backend_dev_t local_gpu_devices[] = {local_gpu, nullptr};
     if (n_gpu_layers == 0) {
         model_params.devices = no_gpu_devices;
     } else {

@@ -216,6 +216,18 @@ ggml_backend_dev_t firstLocalGpuDevice() {
     return nullptr;
 }
 
+bool probeLinkedGpuBackend() {
+    if (g_gpu_backend_loaded) return true;
+    // Windows statically links ggml-vulkan into the plugin DLL, so the backend
+    // is registered at startup and there is nothing to load. Android ships it
+    // as a separate libggml-vulkan.so and calls ggml_backend_load instead.
+    ggml_backend_reg_t vulkan = ggml_backend_reg_by_name("Vulkan");
+    if (!vulkan) return false;
+    std::lock_guard<std::mutex> lock(g_backend_mutex);
+    g_gpu_backend_loaded = true;
+    return true;
+}
+
 static void llamaLogHook(ggml_log_level level, const char* text, void*) {
     if (!text) return;
     // Newer llama.cpp logs thousands of DEBUG lines per model load (graph

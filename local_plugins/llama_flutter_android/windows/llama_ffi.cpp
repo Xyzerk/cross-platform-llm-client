@@ -207,6 +207,10 @@ int plm_clear_context(void) {
 }
 
 char* plm_detect_gpu_json(void) {
+    // A statically linked backend (Windows Vulkan builds) is already
+    // registered; this only flips the engine's flag so detectGpu looks at it.
+    plm::probeLinkedGpuBackend();
+
     std::string name;
     long long total_mem = 0;
     if (!plm::detectGpu(name, total_mem)) return nullptr;

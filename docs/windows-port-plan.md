@@ -383,6 +383,11 @@ The current engine lives in `local_plugins/llama_flutter_android/android/src/mai
 
 **Deliverable:** reproducible build and a regression baseline.
 
+Status: implemented. `lib/services/cluster_planner.dart`,
+`lib/core/path_helpers.dart`, the `ClusterBackend.overrideForTesting` /
+`LlamaController(host:)` seams, `scripts/build_windows.ps1 -Package`, and
+`docs/windows-cluster.md` are in place.
+
 1. **Unit tests (pure Dart):**
    - Extract `_fillFastestFirst`, `_splitBySpeed`, `_gb` from `ClusterService` into `lib/services/cluster_planner.dart`; add `test/cluster_planner_test.dart`.
    - Add `test/path_helpers_test.dart` for model-name extraction.
@@ -551,7 +556,11 @@ Each PR should keep `flutter analyze` and `flutter test` green, and PRs 2–4 mu
 - iOS as master.
 - Code signing / MSIX installer.
 - UDP beacon discovery fallback (add only if mDNS proves unreliable).
-- GPU (Vulkan) inference on Windows: CPU first, then opt-in Vulkan.
+- GPU (Vulkan) inference on Windows is **implemented and opt-in** (Phase 2c):
+  build with `-Vulkan` / `PRIVATELM_WINDOWS_VULKAN=1`. The default build stays
+  CPU-only, and a machine without a Vulkan device falls back to the CPU. It is
+  not on by default because it links `vulkan-1.dll` and needs the SDK at build
+  time.
 
 ---
 

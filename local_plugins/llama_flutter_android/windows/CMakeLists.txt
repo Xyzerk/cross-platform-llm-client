@@ -17,7 +17,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 #     files to ship or load)
 #   - CPU backend (plain, no GGML_BACKEND_DL variant .so loading)
 #   - GGML_RPC=ON: cluster client today, worker server in Phase 4
-#   - Vulkan deferred to Phase 2c (GGML_VULKAN stays OFF)
+#   - Vulkan opt-in via PRIVATELM_WINDOWS_VULKAN (Phase 2c); default CPU-only
 #   - mtmd ON, mirroring the Android build, so vision-portable code compiles
 # ---------------------------------------------------------------------------
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Static first: nothing but this DLL ships" FORCE)
@@ -32,6 +32,63 @@ set(MTMD_VIDEO OFF CACHE BOOL "No ffmpeg on Windows" FORCE)
 set(GGML_RPC ON CACHE BOOL "Cluster (RPC) support" FORCE)
 set(GGML_RPC_RDMA OFF CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL OFF CACHE BOOL "Static backends for the first Windows build" FORCE)
+
+# ---------------------------------------------------------------------------
+# Vulkan/GPU inference (Phase 2c) is opt-in. The default build stays CPU-only:
+# it needs no Vulkan SDK and no vulkan-1.dll at runtime.
+#
+# Enable it for one build with:
+#   $env:PRIVATELM_WINDOWS_VULKAN = 1; flutter build windows --release
+# or `scripts/build_windows.ps1 -Release -Vulkan`.
+#
+# The backend is compiled into the plugin DLL. A machine without a Vulkan ICD
+# (or without Vulkan support in its driver) still starts: the backend registers
+# zero devices, detectGpu() reports no GPU and the engine runs on the CPU.
+# ---------------------------------------------------------------------------
+set(LLAMA_WINDOWS_VULKAN OFF)
+if(DEFINED ENV{PRIVATELM_WINDOWS_VULKAN})
+    set(_plm_vulkan "$ENV{PRIVATELM_WINDOWS_VULKAN}")
+    if(NOT _plm_vulkan STREQUAL "" AND
+       NOT _plm_vulkan STREQUAL "0" AND
+       NOT _plm_vulkan STREQUAL "OFF" AND
+       NOT _plm_vulkan STREQUAL "off")
+        set(LLAMA_WINDOWS_VULKAN ON)
+    endif()
+endif()
+
+if(LLAMA_WINDOWS_VULKAN)
+    # ggml's Vulkan target runs find_package(Vulkan COMPONENTS glslc), then
+    # find_package(SPIRV-Headers CONFIG) after appending $ENV{VULKAN_SDK} to
+    # CMAKE_PREFIX_PATH. Find the SDK once here and export it so the
+    # subdirectory sees the same one.
+    if(NOT DEFINED ENV{VULKAN_SDK} AND DEFINED ENV{Vulkan_ROOT})
+        set(ENV{VULKAN_SDK} "$ENV{Vulkan_ROOT}")
+    endif()
+    if(NOT DEFINED ENV{VULKAN_SDK})
+        file(GLOB _plm_vulkan_sdks "$ENV{ProgramFiles}/VulkanSDK/*")
+        if(_plm_vulkan_sdks)
+            list(SORT _plm_vulkan_sdks)
+            list(REVERSE _plm_vulkan_sdks)
+            list(GET _plm_vulkan_sdks 0 _plm_vulkan_sdk)
+            set(ENV{VULKAN_SDK} "${_plm_vulkan_sdk}")
+        endif()
+    endif()
+    if(NOT DEFINED ENV{VULKAN_SDK})
+        message(FATAL_ERROR
+            "PRIVATELM_WINDOWS_VULKAN is set but no Vulkan SDK was found. "
+            "Install it from https://vulkan.lunarg.com or set VULKAN_SDK.")
+    endif()
+    message(STATUS "PrivateLM: Vulkan backend enabled (SDK $ENV{VULKAN_SDK})")
+    set(GGML_VULKAN ON CACHE BOOL "ggml: use Vulkan" FORCE)
+    # ggml builds the Vulkan shader generator with ExternalProject. Its default
+    # prefix lives under llama.cpp/ggml/src/ggml-vulkan, which pushes MSBuild's
+    # FileTracker log paths past MAX_PATH and fails with FTK1011. EP_BASE is a
+    # directory property inherited by the llama.cpp subtree; a short base keeps
+    # the nested configure under the limit.
+    set_property(DIRECTORY PROPERTY EP_BASE "${CMAKE_BINARY_DIR}/ep")
+else()
+    set(GGML_VULKAN OFF CACHE BOOL "ggml: use Vulkan" FORCE)
+endif()
 
 # llama.cpp ships unconditional install() rules (llama.lib, headers,
 # pkg-config files). Flutter's INSTALL step runs them with its

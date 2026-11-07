@@ -8,12 +8,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:llama_flutter_android/llama_flutter_android.dart';
-import 'package:path/path.dart' as p;
 
 import '../core/constants.dart';
+import '../core/path_helpers.dart';
 import '../core/ui.dart';
 import 'app_log_service.dart';
 import 'cluster_backend.dart';
+import 'cluster_planner.dart';
 import 'hive_service.dart';
 
 /// What this phone does in a phone cluster.
@@ -36,13 +37,7 @@ class ClusterShare {
 }
 
 /// A phone the master can put layers on, for planning a load.
-class _Phone {
-  final ClusterWorker? worker; // null: the master itself
-  final double capacityMb;
-  final double speed; // GB/s
-  double assignedMb = 0;
-  _Phone(this.worker, this.capacityMb, this.speed);
-}
+typedef _Phone = ClusterPhone;
 
 /// Phone cluster: spread a GGUF model across phones on the same Wi-Fi.
 /// The master runs the model; workers hold part of its layers.
@@ -497,8 +492,8 @@ class ClusterService extends GetxService {
     ];
     final totalMb = phones.fold<double>(0, (a, p) => a + p.capacityMb);
     if (needMb > totalMb) {
-      throw Exception('This model (${_gb(modelMb)}) is too big for these '
-          '${phones.length} phones: together they have about ${_gb(totalMb)} '
+      throw Exception('This model (${formatGb(modelMb)}) is too big for these '
+          '${phones.length} phones: together they have about ${formatGb(totalMb)} '
           'free.${offline.isEmpty ? '' : ' Not reachable: ${offline.map((w) => w.model ?? w.name).join(', ')}.'} '
           'Add another worker, close apps on the phones, or pick a '
           'smaller model.');
@@ -510,14 +505,14 @@ class ClusterService extends GetxService {
     }
     if (needMb <= master.capacityMb) {
       final share = await _askFitsHere(
-          modelName ?? p.basename(modelPath), modelMb, available.length);
+          modelName ?? modelFileName(modelPath), modelMb, available.length);
       if (!share) {
         await _backend.clear();
         return 0;
       }
-      _splitBySpeed(phones, needMb);
+      splitBySpeed(phones, needMb);
     } else {
-      _fillFastestFirst(phones, needMb);
+      fillFastestFirst(phones, needMb);
     }
 
     final used = phones.where((p) => p.worker != null && p.assignedMb > 0).toList();
@@ -537,42 +532,6 @@ class ClusterService extends GetxService {
           'device, or set this device\'s cluster role to Off.');
     }
     return used.length;
-  }
-
-  /// Fastest first, each up to its free memory, until the model is placed.
-  static void _fillFastestFirst(List<_Phone> phones, double needMb) {
-    final bySpeed = [...phones]..sort((a, b) => b.speed.compareTo(a.speed));
-    var left = needMb;
-    for (final p in bySpeed) {
-      p.assignedMb = math.min(p.capacityMb, left);
-      left -= p.assignedMb;
-    }
-  }
-
-  /// Shares in proportion to speed, capped at each phone's free memory
-  /// (what a capped phone can't take goes to the others).
-  static void _splitBySpeed(List<_Phone> phones, double needMb) {
-    var open = [...phones];
-    var left = needMb;
-    while (open.isNotEmpty && left > 0.5) {
-      final speedSum = open.fold<double>(0, (a, p) => a + p.speed);
-      final capped = [
-        for (final p in open)
-          if (p.assignedMb + left * p.speed / speedSum >= p.capacityMb) p,
-      ];
-      if (capped.isEmpty) {
-        for (final p in open) {
-          p.assignedMb += left * p.speed / speedSum;
-        }
-        left = 0;
-      } else {
-        for (final p in capped) {
-          left -= p.capacityMb - p.assignedMb;
-          p.assignedMb = p.capacityMb;
-        }
-        open = open.where((p) => !capped.contains(p)).toList();
-      }
-    }
   }
 
   /// LiteRT models can't be split across phones (the cluster is llama.cpp).
@@ -611,7 +570,7 @@ class ClusterService extends GetxService {
       context,
       title: 'This model fits on this device',
       subtitle: '${model.replaceAll(RegExp(r'\.gguf$'), '')} needs about '
-          '${_gb(modelMb)}, and this device has room for it. Running it here '
+          '${formatGb(modelMb)}, and this device has room for it. Running it here '
           'is faster, because sharing sends every word over Wi-Fi. Share it '
           'to free up memory on this device.',
       builder: (ctx) => Column(
@@ -662,6 +621,4 @@ class ClusterService extends GetxService {
   }
 
   void clearSplit() => split.clear();
-
-  static String _gb(double mb) => '${(mb / 1024).toStringAsFixed(1)} GB';
 }

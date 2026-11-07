@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'package:get/get.dart';
-import 'package:path/path.dart' as p;
 import 'hive_service.dart';
 import '../core/constants.dart';
+import '../core/path_helpers.dart';
 import 'device_info_service.dart';
 import 'app_log_service.dart';
 import 'cluster_service.dart';
@@ -111,7 +111,7 @@ class InferenceService extends GetxService {
 
       await unloadModel();
       isLoadingModel.value = true;
-      loadingModelName.value = modelName ?? p.basename(modelPath);
+      loadingModelName.value = modelName ?? modelFileName(modelPath);
       modelLoadProgress.value = 0.0;
 
       _engine = platform.InferenceEngine();
@@ -140,7 +140,7 @@ class InferenceService extends GetxService {
             .applyForNextLoad(modelPath, modelName: modelName);
       }
 
-      final requestedModelName = modelName ?? p.basename(modelPath);
+      final requestedModelName = modelName ?? modelFileName(modelPath);
       var activeModelName = requestedModelName;
       var result = await _loadModelOnEngine(
         modelPath: modelPath,

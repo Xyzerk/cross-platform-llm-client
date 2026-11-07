@@ -12,13 +12,14 @@ class LlamaController implements LlamaFlutterApi {
   bool _isLoading = false;
   bool _isGenerating = false;
 
-  LlamaController({BinaryMessenger? binaryMessenger}) {
-    _api = createLlamaHost(LlamaHostEvents(
-      onToken: onToken,
-      onDone: onDone,
-      onError: onError,
-      onLoadProgress: onLoadProgress,
-    ));
+  LlamaController({BinaryMessenger? binaryMessenger, LlamaHost? host}) {
+    _api = host ??
+        createLlamaHost(LlamaHostEvents(
+          onToken: onToken,
+          onDone: onDone,
+          onError: onError,
+          onLoadProgress: onLoadProgress,
+        ));
     LlamaFlutterApi.setUp(
       this,
       binaryMessenger: binaryMessenger,
