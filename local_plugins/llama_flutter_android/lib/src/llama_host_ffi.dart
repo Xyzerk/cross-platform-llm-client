@@ -1,4 +1,5 @@
-// Windows LlamaHost: in-process dart:ffi over llama_flutter_android.dll.
+// Desktop LlamaHost: in-process dart:ffi over the plugin engine library
+// (llama_flutter_android.dll on Windows, libllama_flutter_android.so on Linux).
 //
 // Blocking native calls (model load, generation) run in a short-lived worker
 // isolate. Callbacks are created with NativeCallable.isolateLocal inside that
@@ -16,8 +17,8 @@ import 'package:flutter/services.dart' show PlatformException;
 
 import 'chat_templates.dart';
 import 'llama_api.dart';
+import 'llama_desktop_ffi.dart';
 import 'llama_host.dart';
-import 'llama_windows_ffi.dart';
 
 /// llama.cpp's vision marker, as used by the Android plugin.
 const String _mediaMarker = '<__media__>';
@@ -27,13 +28,13 @@ class LlamaHostFfi implements LlamaHost {
 
   final LlamaHostEvents _events;
 
-  LlamaWindowsBindings? _mainBindings;
+  LlamaDesktopBindings? _mainBindings;
   String? _modelPath;
   Future<void> _tail = Future<void>.value();
   _FfiRun? _activeRun;
 
-  LlamaWindowsBindings get _bindings =>
-      _mainBindings ??= LlamaWindowsBindings.open();
+  LlamaDesktopBindings get _bindings =>
+      _mainBindings ??= LlamaDesktopBindings.open();
 
   /// Serializes calls that touch the model/context. [stop] deliberately does
   /// not go through this queue: it must be able to cut in mid-generation.
@@ -480,7 +481,7 @@ class _GenerateDone {
 /// synchronously through an isolate-local native callback.
 @pragma('vm:entry-point')
 void _loadWorker(_LoadRequest request) {
-  final bindings = LlamaWindowsBindings.open();
+  final bindings = LlamaDesktopBindings.open();
   NativeCallable<PlmProgressNative>? progress;
   Pointer<Utf8> modelPath = nullptr;
   Pointer<Utf8> mmprojPath = nullptr;
@@ -516,7 +517,7 @@ void _loadWorker(_LoadRequest request) {
 /// native callback returns, then sent to the main isolate in order.
 @pragma('vm:entry-point')
 void _generateWorker(_GenerateRequest request) {
-  final bindings = LlamaWindowsBindings.open();
+  final bindings = LlamaDesktopBindings.open();
   NativeCallable<PlmTokenNative>? token;
   Pointer<Utf8> prompt = nullptr;
   Pointer<Utf8> imagePath = nullptr;

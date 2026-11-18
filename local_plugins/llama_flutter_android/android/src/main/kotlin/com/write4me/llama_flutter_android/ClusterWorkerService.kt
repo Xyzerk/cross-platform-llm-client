@@ -41,6 +41,7 @@ class ClusterWorkerService : Service() {
         const val ACTION_STOP = "com.write4me.llama_flutter_android.STOP_CLUSTER_WORKER"
         const val EXTRA_PORT = "port"
         const val EXTRA_THREADS = "threads"
+        const val EXTRA_HOST = "host"
         const val DEFAULT_PORT = 50052
         const val SERVICE_TYPE = "_privatelm._tcp."
         const val PROCESS_SUFFIX = ":cluster"
@@ -90,6 +91,9 @@ class ClusterWorkerService : Service() {
 
         running = true
         val port = intent?.getIntExtra(EXTRA_PORT, DEFAULT_PORT) ?: DEFAULT_PORT
+        // "Only this network" in the app; empty means every interface.
+        val host = intent?.getStringExtra(EXTRA_HOST)?.takeIf { it.isNotEmpty() }
+            ?: "0.0.0.0"
         val threads = intent?.getIntExtra(EXTRA_THREADS, 0)?.takeIf { it > 0 }
             ?: ClusterNative.fastCoreCount()
         acquireLocks()
@@ -107,7 +111,7 @@ class ClusterWorkerService : Service() {
             startStatusLoop()
             val error = ClusterNative.nativeServe(
                 applicationInfo.nativeLibraryDir,
-                "0.0.0.0:$port",
+                "$host:$port",
                 cacheDir.absolutePath,
                 threads.toLong()
             )

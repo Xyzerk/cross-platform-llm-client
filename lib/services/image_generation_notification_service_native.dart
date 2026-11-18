@@ -18,6 +18,11 @@ class ImageGenerationNotificationService {
 
   Future<void> init() async {
     if (_initialized) return;
+    // No local-notification implementation on desktop; the app still runs.
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      _initialized = true;
+      return;
+    }
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const settings = InitializationSettings(android: android);
     await _notifications.initialize(settings);
@@ -96,7 +101,8 @@ class ImageGenerationNotificationService {
     required int elapsedSeconds,
   }) async {
     if (!Platform.isAndroid) return;
-    final percent = total > 0 ? ((step / total) * 100).clamp(0, 100).round() : 0;
+    final percent =
+        total > 0 ? ((step / total) * 100).clamp(0, 100).round() : 0;
     final eta = etaSeconds > 0 ? ' · ~${_formatEta(etaSeconds)} left' : '';
     final elapsed = ' · ${_formatEta(elapsedSeconds)} elapsed';
     final body = total > 0
@@ -114,7 +120,8 @@ class ImageGenerationNotificationService {
 
   Future<void> decoding() async {
     if (!Platform.isAndroid) return;
-    FlutterBackgroundService().invoke('progress', {'content': 'Decoding image...'});
+    FlutterBackgroundService()
+        .invoke('progress', {'content': 'Decoding image...'});
     await _showProgress(
       title: 'Finishing image',
       body: 'Decoding image...',

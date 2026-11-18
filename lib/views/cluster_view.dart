@@ -2,15 +2,17 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:llama_flutter_android/llama_flutter_android.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../core/ui.dart';
 import '../services/cluster_backend.dart';
 import '../services/cluster_service.dart';
+import '../services/usb_bridge_service.dart';
 
-/// Phone cluster: pick Master (runs the model) or Worker (lends this phone),
-/// and pair them by scanning the worker's QR code.
+/// AI cluster: pick Master (runs the model) or Worker (lends this device),
+/// and pair devices by QR, address, USB or Tailscale.
 class ClusterView extends StatefulWidget {
   const ClusterView({super.key});
 
@@ -27,6 +29,10 @@ class _ClusterViewState extends State<ClusterView> {
     super.initState();
     cluster.refreshWorkerStatus();
     cluster.refreshWifiAddress();
+    if (ClusterService.isDesktop) {
+      cluster.refreshUsb();
+      cluster.refreshTailscale();
+    }
     if (cluster.role == ClusterRole.master) cluster.relocateWorkers();
     // Pick up Wi-Fi being turned on while this screen is open.
     _wifiTimer = Timer.periodic(
@@ -44,11 +50,7 @@ class _ClusterViewState extends State<ClusterView> {
     final t = AppTokens.of(context);
     return Scaffold(
       backgroundColor: t.bg,
-      appBar: appScreenBar(
-          context,
-          title: ClusterService.isDesktop ? 'Device cluster' : 'Phone cluster',
-          showBack: true),
-
+      appBar: appScreenBar(context, title: 'AI cluster', showBack: true),
       body: Obx(() {
         final role = cluster.role;
         return ListView(
@@ -65,7 +67,8 @@ class _ClusterViewState extends State<ClusterView> {
               onChanged: cluster.setRole,
             ),
             const SizedBox(height: 16),
-            if (role != ClusterRole.off && cluster.wifiAddress.value == null) ...[
+            if (role != ClusterRole.off &&
+                cluster.wifiAddress.value == null) ...[
               AppNotice(
                 'Turn on Wi-Fi. All devices in the cluster must be on the same '
                 'network.',
@@ -93,7 +96,7 @@ class _ClusterViewState extends State<ClusterView> {
         AppNotice(
           ClusterService.canBeMaster
               ? 'Run models too big for one device by sharing the work across '
-                  'devices on the same Wi-Fi or LAN.\n\n'
+                  'devices on the same Wi-Fi, LAN, USB cable or tailnet.\n\n'
                   'Master: the device you chat on. It runs the model.\n'
                   'Worker: a phone or PC that lends its memory to the master.'
               : 'Help an Android phone running PrivateLM run models too big for '
@@ -106,36 +109,77 @@ class _ClusterViewState extends State<ClusterView> {
   Widget _interfacePicker(BuildContext context) {
     final t = AppTokens.of(context);
     final address = cluster.wifiAddress.value;
-    final name = cluster.interfaces
-            .firstWhereOrNull((i) => i.address == address)
-            ?.name ??
-        'Network';
+    final selected =
+        cluster.interfaces.firstWhereOrNull((i) => i.address == address);
     return Row(children: [
       Icon(Icons.lan_rounded, size: 18, color: t.muted),
       const SizedBox(width: 8),
-      Expanded(child: Text('$name · $address', style: t.caption)),
+      Expanded(
+        child: Text(
+            selected == null
+                ? 'Network · $address'
+                : '${selected.kind.label} · ${selected.name} · $address',
+            style: t.caption),
+      ),
       PillButton(label: 'Change', onPressed: () => _chooseInterface(context)),
     ]);
   }
 
   Future<void> _chooseInterface(BuildContext context) async {
+    final current = cluster.wifiAddress.value;
     final address = await showAppSheet<String>(
       context,
       title: 'Cluster network',
       subtitle: 'Pick the network the other devices can reach.',
-      builder: (ctx) => Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (final interface in cluster.interfaces)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: PillButton(
-                label: '${interface.name} · ${interface.address}',
-                primary: interface.address == cluster.wifiAddress.value,
-                onPressed: () => Navigator.pop(ctx, interface.address),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final interface in cluster.interfaces)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: PillButton(
+                  label:
+                      '${interface.kind.label} · ${interface.name} · ${interface.address}',
+                  primary: interface.address == cluster.wifiAddress.value,
+                  onPressed: () => Navigator.pop(ctx, interface.address),
+                ),
               ),
-            ),
-        ],
+            if (ClusterService.isDesktop) ...[
+              const SizedBox(height: 8),
+              AppRow(
+                icon: Icons.vpn_lock_rounded,
+                title: 'Tailscale interfaces',
+                subtitle: 'Offer 100.x/tailnet addresses. Off by default.',
+                trailing: Switch(
+                  value: cluster.includeVpn.value,
+                  onChanged: (value) async {
+                    await cluster.setIncludeVpn(value);
+                    setSheetState(() {});
+                  },
+                ),
+              ),
+            ],
+            if (current != null) ...[
+              const SizedBox(height: 8),
+              AppRow(
+                icon: Icons.lock_outline_rounded,
+                title: 'Worker: this network only',
+                subtitle:
+                    'Listen only on this address, so other networks cannot '
+                    'reach port ${ClusterBackend.defaultPort}. Takes effect when '
+                    'the worker restarts.',
+                trailing: Switch(
+                  value: cluster.workerBindHost.value == current,
+                  onChanged: (value) async {
+                    await cluster.setWorkerBindHost(value ? current : null);
+                    setSheetState(() {});
+                  },
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
     if (address != null) await cluster.setInterface(address);
@@ -155,9 +199,11 @@ class _ClusterViewState extends State<ClusterView> {
         const SizedBox(height: 12),
         Text('Worker stopped', style: t.bodyStrong),
         const SizedBox(height: 4),
-        Text(s.error ?? 'Unknown error', style: t.caption, textAlign: TextAlign.center),
+        Text(s.error ?? 'Unknown error',
+            style: t.caption, textAlign: TextAlign.center),
         const SizedBox(height: 16),
-        PillButton(label: 'Try again', primary: true, onPressed: cluster.startWorker),
+        PillButton(
+            label: 'Try again', primary: true, onPressed: cluster.startWorker),
       ]);
     } else if (s.peer != null) {
       body = _centered(context, [
@@ -170,12 +216,18 @@ class _ClusterViewState extends State<ClusterView> {
         Row(children: [
           Expanded(child: _Stat(label: 'Holding', value: _gb(s.heldMb))),
           Expanded(child: _Stat(label: 'Free at start', value: _gb(s.ramMb))),
-          Expanded(child: _Stat(label: 'Memory speed', value: '${s.bandwidth.toStringAsFixed(1)} GB/s')),
+          Expanded(
+              child: _Stat(
+                  label: 'Memory speed',
+                  value: '${s.bandwidth.toStringAsFixed(1)} GB/s')),
         ]),
       ]);
     } else if (!s.running || qr == null) {
       body = _centered(context, [
-        const SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 2.5)),
+        const SizedBox(
+            width: 28,
+            height: 28,
+            child: CircularProgressIndicator(strokeWidth: 2.5)),
         const SizedBox(height: 16),
         Text(
             s.running
@@ -213,10 +265,17 @@ class _ClusterViewState extends State<ClusterView> {
         const SizedBox(height: 16),
         Row(children: [
           Expanded(child: _Stat(label: 'Free memory', value: _gb(s.ramMb))),
-          Expanded(child: _Stat(label: 'Memory speed', value: '${s.bandwidth.toStringAsFixed(1)} GB/s')),
+          Expanded(
+              child: _Stat(
+                  label: 'Memory speed',
+                  value: '${s.bandwidth.toStringAsFixed(1)} GB/s')),
         ]),
       ]);
     }
+
+    final firewallHelp = ClusterService.isLinux
+        ? 'allow the worker port through your firewall'
+        : 'allow PrivateLM through Windows Firewall';
 
     return [
       if (cluster.firewallReady.value == false) ...[
@@ -234,6 +293,16 @@ class _ClusterViewState extends State<ClusterView> {
             primary: true,
             onPressed: cluster.allowFirewall,
           ),
+        ),
+        const SizedBox(height: 16),
+      ],
+      if (ClusterService.isLinux && s.running) ...[
+        AppNotice(
+          'If another device can\'t connect, allow the worker port through '
+          'your firewall: sudo ufw allow ${ClusterBackend.defaultPort}/tcp '
+          '(or sudo firewall-cmd --add-port=${ClusterBackend.defaultPort}/tcp).',
+          icon: Icons.shield_outlined,
+          color: t.orange,
         ),
         const SizedBox(height: 16),
       ],
@@ -257,6 +326,19 @@ class _ClusterViewState extends State<ClusterView> {
         const SizedBox(height: 16),
       ],
       AppCard(padding: const EdgeInsets.fromLTRB(16, 24, 16, 20), child: body),
+      if (s.running &&
+          ClusterService.isDesktop &&
+          cluster.usbAvailable.value) ...[
+        const SizedBox(height: 16),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: PillButton(
+            label: 'Connect a phone over USB',
+            icon: Icons.usb_rounded,
+            onPressed: () => _connectPhoneOverUsb(context),
+          ),
+        ),
+      ],
       SectionFootnote(ClusterService.workerStopsWithApp
           ? 'Keep this device plugged in, on the same Wi-Fi, with PrivateLM open: '
               'iOS pauses apps in the background. Close PrivateLM to stop sharing.'
@@ -264,10 +346,10 @@ class _ClusterViewState extends State<ClusterView> {
               ? 'Keep this PC plugged in and on the same network. PrivateLM '
                   'starts a small background process for the worker and stops '
                   'it when you turn Worker off or close the app. If the master '
-                  'can\'t connect, allow PrivateLM through Windows Firewall.'
+                  'can\'t connect, $firewallHelp.'
               : 'Keep this phone plugged in and on the same Wi-Fi, with PrivateLM '
                   'open: the screen stays on while sharing, because Android slows '
-                  'background work. Set Phone cluster to Off to stop.'),
+                  'background work. Set AI cluster to Off to stop.'),
     ];
   }
 
@@ -305,9 +387,10 @@ class _ClusterViewState extends State<ClusterView> {
             icon: Icons.devices_other_rounded,
             title: 'No workers yet',
             message: ClusterService.isDesktop
-                ? 'On the other device, open the cluster screen, choose Worker, '
-                    'then enter the IP and port it shows here.'
-                : 'On each other device, open Phone cluster, choose Worker, '
+                ? 'On the other device, open the AI cluster screen, choose '
+                    'Worker, then enter the address it shows here. A phone on a '
+                    'USB cable can be added directly with "Add over USB".'
+                : 'On each other device, open AI cluster, choose Worker, '
                     'then scan the QR code it shows.',
           ),
         ])
@@ -315,12 +398,14 @@ class _ClusterViewState extends State<ClusterView> {
         AppGroup(dividerIndent: 60, children: [
           for (final w in cluster.workers)
             AppRow(
-              icon: Icons.smartphone_rounded,
+              icon: _transportIcon(w),
               title: w.model ?? w.name,
               subtitle: [
                 w.endpoint,
+                if (w.transport != ClusterTransport.lan) w.transport.label,
                 if (w.ramMb != null) '${_gb(w.ramMb!)} free',
-                if (w.bandwidth != null) '${w.bandwidth!.toStringAsFixed(1)} GB/s',
+                if (w.bandwidth != null)
+                  '${w.bandwidth!.toStringAsFixed(1)} GB/s',
               ].join(' · '),
               trailing: IconButton(
                 icon: Icon(Icons.close_rounded, color: t.muted),
@@ -336,25 +421,36 @@ class _ClusterViewState extends State<ClusterView> {
         'needed are left out.',
       ),
       const SectionHeader('Other ways to add'),
-      Row(children: [
+      Wrap(spacing: 10, runSpacing: 10, children: [
         PillButton(
           label: cluster.isScanning.value ? 'Searching…' : 'Find nearby',
           icon: Icons.wifi_find_rounded,
           onPressed: cluster.isScanning.value ? null : cluster.scanNearby,
         ),
-        const SizedBox(width: 10),
         PillButton(
           label: 'Enter IP',
           icon: Icons.keyboard_rounded,
           onPressed: () => _enterIp(context),
         ),
+        if (ClusterService.isDesktop && cluster.usbAvailable.value)
+          PillButton(
+            label: 'Add over USB',
+            icon: Icons.usb_rounded,
+            onPressed: () => _addOverUsb(context),
+          ),
+        if (ClusterService.isDesktop && cluster.tailscaleAvailable.value)
+          PillButton(
+            label: 'Find Tailscale',
+            icon: Icons.vpn_lock_rounded,
+            onPressed: () => _findTailscale(context),
+          ),
       ]),
       if (cluster.found.isNotEmpty) ...[
         const SizedBox(height: 12),
         AppGroup(dividerIndent: 60, children: [
           for (final w in cluster.found)
             AppRow(
-              icon: Icons.smartphone_rounded,
+              icon: _transportIcon(w),
               title: w.model ?? w.name,
               subtitle: w.endpoint,
               trailing: PillButton(
@@ -365,8 +461,36 @@ class _ClusterViewState extends State<ClusterView> {
             ),
         ]),
       ],
+      if (cluster.tailscalePeers.isNotEmpty) ...[
+        const SectionHeader('Tailscale devices'),
+        AppGroup(dividerIndent: 60, children: [
+          for (final w in cluster.tailscalePeers)
+            AppRow(
+              icon: Icons.vpn_lock_rounded,
+              title: w.model ?? w.name,
+              subtitle: [
+                w.endpoint,
+                if (w.latencyMs != null) '~${w.latencyMs} ms',
+              ].join(' · '),
+              trailing: PillButton(
+                label: 'Add',
+                primary: true,
+                onPressed: () => _report(cluster.addTailscalePeer(w)),
+              ),
+            ),
+        ]),
+      ],
     ];
   }
+
+  IconData _transportIcon(ClusterWorker worker) => switch (worker.transport) {
+        ClusterTransport.usbAdb => Icons.usb_rounded,
+        ClusterTransport.usbTether => Icons.usb_rounded,
+        ClusterTransport.tailscale => Icons.vpn_lock_rounded,
+        ClusterTransport.lan => ClusterService.isDesktop
+            ? Icons.computer_rounded
+            : Icons.smartphone_rounded,
+      };
 
   Future<void> _scanQr() async {
     final code = await Get.to<String>(() => const _QrScanPage());
@@ -390,11 +514,13 @@ class _ClusterViewState extends State<ClusterView> {
             minLines: 1,
             maxLines: 3,
             keyboardType: TextInputType.url,
-            decoration: appInputDecoration(ctx, hint: 'privatelm://worker?host=…'),
+            decoration:
+                appInputDecoration(ctx, hint: 'privatelm://worker?host=…'),
             onSubmitted: (v) => Navigator.pop(ctx, v),
           ),
           const SizedBox(height: 16),
-          PrimaryButton(label: 'Add', onPressed: () => Navigator.pop(ctx, ctrl.text)),
+          PrimaryButton(
+              label: 'Add', onPressed: () => Navigator.pop(ctx, ctrl.text)),
         ],
       ),
     );
@@ -406,8 +532,9 @@ class _ClusterViewState extends State<ClusterView> {
     final ctrl = TextEditingController();
     final input = await showAppSheet<String>(
       context,
-      title: 'Enter worker IP',
-      subtitle: 'Shown under the worker\'s QR code',
+      title: 'Enter worker address',
+      subtitle: 'IP, host name or MagicDNS name. The port defaults to '
+          '${ClusterBackend.defaultPort}.',
       builder: (ctx) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -420,12 +547,150 @@ class _ClusterViewState extends State<ClusterView> {
             onSubmitted: (v) => Navigator.pop(ctx, v),
           ),
           const SizedBox(height: 16),
-          PrimaryButton(label: 'Add', onPressed: () => Navigator.pop(ctx, ctrl.text)),
+          PrimaryButton(
+              label: 'Add', onPressed: () => Navigator.pop(ctx, ctrl.text)),
         ],
       ),
     );
     ctrl.dispose();
     if (input != null) await _report(cluster.addManual(input));
+  }
+
+  /// Picks an attached phone. Returns null when the sheet is dismissed.
+  Future<AdbDevice?> _pickUsbDevice(
+    BuildContext context, {
+    required String title,
+    required String subtitle,
+    required String action,
+  }) async {
+    final devices = cluster.usbDevices;
+    return showAppSheet<AdbDevice>(
+      context,
+      title: title,
+      subtitle: subtitle,
+      builder: (ctx) {
+        if (devices.isEmpty) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Text(
+              'No USB devices found.\n\nConnect a phone with a data cable, '
+              'enable Developer options → USB debugging, then tap Allow on '
+              'the phone.',
+            ),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final device in devices)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: AppRow(
+                  icon: Icons.usb_rounded,
+                  title: device.label,
+                  subtitle: device.problem ?? device.serial,
+                  trailing: PillButton(
+                    label: device.usable ? action : 'Unavailable',
+                    primary: device.usable,
+                    onPressed:
+                        device.usable ? () => Navigator.pop(ctx, device) : null,
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// PC master: expose a phone's worker over `adb forward`.
+  Future<void> _addOverUsb(BuildContext context) async {
+    await cluster.refreshUsb();
+    if (!context.mounted) return;
+    final device = await _pickUsbDevice(
+      context,
+      title: 'Add a phone over USB',
+      subtitle: 'The phone must be on the Worker screen while the cable is '
+          'connected.',
+      action: 'Add',
+    );
+    if (device == null || !context.mounted) return;
+    final error = await cluster.addUsbWorker(device);
+    if (!context.mounted) return;
+    if (error != null) {
+      showToast('Couldn\'t add the phone', error, tone: ToastTone.error);
+    } else {
+      showToast('Phone added over USB',
+          'It is used the next time you load a GGUF model.',
+          tone: ToastTone.success);
+    }
+  }
+
+  /// PC worker: expose this PC's worker on the phone's loopback.
+  Future<void> _connectPhoneOverUsb(BuildContext context) async {
+    await cluster.refreshUsb();
+    if (!context.mounted) return;
+    final device = await _pickUsbDevice(
+      context,
+      title: 'Share this PC with a phone',
+      subtitle: 'The phone runs the model; this PC lends its memory over the '
+          'cable.',
+      action: 'Connect',
+    );
+    if (device == null || !context.mounted) return;
+    final result = await cluster.exposeWorkerToDevice(device);
+    if (!context.mounted) return;
+    if (result.error != null) {
+      showToast('Couldn\'t connect the phone', result.error!,
+          tone: ToastTone.error);
+      return;
+    }
+    showToast(
+      'Phone connected',
+      'On the phone, choose Master and add 127.0.0.1:${result.port}.',
+      tone: ToastTone.success,
+    );
+  }
+
+  /// Tailscale discovery, behind the opt-in and a security warning.
+  Future<void> _findTailscale(BuildContext context) async {
+    if (!cluster.includeVpn.value) {
+      final ok = await showAppSheet<bool>(
+        context,
+        title: 'Use Tailscale for clustering?',
+        subtitle: 'Tailscale reaches devices outside your LAN, but it is not a '
+            'trusted LAN: the cluster protocol has no authentication, so any '
+            'device on your tailnet could use this worker.\n\n'
+            'Restrict TCP ${ClusterBackend.defaultPort} with Tailscale ACLs and '
+            'only use devices you control. Never expose the port to the '
+            'internet.',
+        builder: (ctx) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            PrimaryButton(
+              label: 'Turn on Tailscale',
+              icon: Icons.vpn_lock_rounded,
+              onPressed: () => Navigator.pop(ctx, true),
+            ),
+            const SizedBox(height: 10),
+            TonalButton.neutral(ctx,
+                label: 'Cancel', onTap: () => Navigator.pop(ctx, false)),
+          ],
+        ),
+      );
+      if (ok != true) return;
+      await cluster.setIncludeVpn(true);
+    }
+    await cluster.refreshTailscale();
+    if (!context.mounted) return;
+    if (cluster.tailscalePeers.isEmpty) {
+      showToast('No Tailscale devices found',
+          'Check that Tailscale is running and the other device is online.');
+    } else {
+      showToast('Found ${cluster.tailscalePeers.length} Tailscale device(s)',
+          'They are listed under Tailscale devices.',
+          tone: ToastTone.success);
+    }
   }
 
   Future<void> _report(Future<String?> adding) async {
@@ -441,7 +706,7 @@ class _ClusterViewState extends State<ClusterView> {
 
 String _gb(num mb) => '${(mb / 1024).toStringAsFixed(1)} GB';
 
-/// How the loaded model is spread across phones: a stacked bar and legend.
+/// How the loaded model is spread across devices: a stacked bar and legend.
 class _SplitCard extends StatelessWidget {
   final List<ClusterShare> shares;
   const _SplitCard({required this.shares});
@@ -449,7 +714,13 @@ class _SplitCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = AppTokens.of(context);
-    final colors = [t.accent, t.green, t.orange, const Color(0xFFAF52DE), t.red];
+    final colors = [
+      t.accent,
+      t.green,
+      t.orange,
+      const Color(0xFFAF52DE),
+      t.red
+    ];
     final total = shares.fold<double>(0, (a, s) => a + s.mb);
     return AppCard(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -469,7 +740,8 @@ class _SplitCard extends StatelessWidget {
                 Expanded(
                   flex: (shares[i].mb / total * 1000).round().clamp(1, 1000),
                   child: Container(
-                    margin: EdgeInsets.only(right: i == shares.length - 1 ? 0 : 2),
+                    margin:
+                        EdgeInsets.only(right: i == shares.length - 1 ? 0 : 2),
                     color: colors[i % colors.length],
                   ),
                 ),
@@ -485,18 +757,20 @@ class _SplitCard extends StatelessWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  shares[i].isThisPhone
+                  shares[i].isThisDevice
                       ? '${shares[i].name} '
                           '(${ClusterService.isDesktop ? 'this PC' : 'this phone'})'
                       : shares[i].name,
                   style: t.body,
                 ),
               ),
-              Text('${(shares[i].mb / total * 100).round()}%', style: t.bodyStrong),
+              Text('${(shares[i].mb / total * 100).round()}%',
+                  style: t.bodyStrong),
               const SizedBox(width: 10),
               SizedBox(
                 width: 58,
-                child: Text(_gb(shares[i].mb), textAlign: TextAlign.right, style: t.caption),
+                child: Text(_gb(shares[i].mb),
+                    textAlign: TextAlign.right, style: t.caption),
               ),
             ]),
           ),
@@ -530,10 +804,11 @@ class _PulsingDot extends StatefulWidget {
   State<_PulsingDot> createState() => _PulsingDotState();
 }
 
-class _PulsingDotState extends State<_PulsingDot> with SingleTickerProviderStateMixin {
-  late final AnimationController _c =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))
-        ..repeat();
+class _PulsingDotState extends State<_PulsingDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 1400))
+    ..repeat();
 
   @override
   void dispose() {
@@ -560,7 +835,8 @@ class _PulsingDotState extends State<_PulsingDot> with SingleTickerProviderState
           Container(
             width: 24,
             height: 24,
-            decoration: BoxDecoration(shape: BoxShape.circle, color: widget.color),
+            decoration:
+                BoxDecoration(shape: BoxShape.circle, color: widget.color),
             child: const Icon(Icons.hub_rounded, size: 14, color: Colors.white),
           ),
         ]),

@@ -6,7 +6,7 @@ import 'dart:io' show Platform;
 import 'package:llama_flutter_android/llama_flutter_android.dart';
 
 import 'cluster_backend.dart';
-import 'cluster_windows_backend.dart';
+import 'cluster_desktop_backend.dart';
 
 /// Android/iOS: everything lives in the plugin, which hosts the RPC worker in
 /// a foreground service and plans the split natively.
@@ -18,8 +18,9 @@ class LlamaClusterBackend implements ClusterBackend {
     int port = ClusterBackend.defaultPort,
     int? threads,
     String? advertiseIp,
+    String? bindHost,
   }) =>
-      LlamaCluster.startWorker(port: port, threads: threads);
+      LlamaCluster.startWorker(port: port, threads: threads, host: bindHost);
 
   @override
   Future<void> stopWorker() => LlamaCluster.stopWorker();
@@ -65,15 +66,17 @@ class LlamaClusterBackend implements ClusterBackend {
     List<double>? weights,
     double localWeight = 1.0,
   }) =>
-      LlamaCluster.setCluster(workers, weights: weights, localWeight: localWeight);
+      LlamaCluster.setCluster(workers,
+          weights: weights, localWeight: localWeight);
 
   @override
   Future<void> clear() => LlamaCluster.clear();
 }
 
-/// One instance per process: the Windows backend owns a child process, so it
+/// One instance per process: the desktop backend owns a child process, so it
 /// must not be recreated on every access.
-final ClusterBackend _instance =
-    Platform.isWindows ? WindowsClusterBackend() : const LlamaClusterBackend();
+final ClusterBackend _instance = Platform.isWindows || Platform.isLinux
+    ? DesktopClusterBackend()
+    : const LlamaClusterBackend();
 
 ClusterBackend createClusterBackend() => _instance;

@@ -1023,9 +1023,9 @@ class ChatView extends GetView<ChatController> {
                       bgColor = _appleBlue(context);
                       iconData = Icons.arrow_upward_rounded;
                       onTap = controller.sendMessage;
-                    } else if (Platform.isWindows &&
+                    } else if ((Platform.isWindows || Platform.isLinux) &&
                         !controller.sttAvailable.value) {
-                      // No speech recognition on Windows: inert send glyph
+                      // No speech recognition on desktop: inert send glyph
                       bgColor = Colors.transparent;
                       iconData = Icons.arrow_upward_rounded;
                       onTap = null;

@@ -69,13 +69,13 @@ class ModelController extends GetxController {
   /// Apple Neural Engine (Core ML) models are only usable on Apple devices.
   static bool get supportsAppleNpu => Platform.isIOS || Platform.isMacOS;
 
-  /// Windows runs GGUF through llama.cpp only; LiteRT and Stable Diffusion
-  /// models have no Windows runtime.
-  static bool get isWindows => Platform.isWindows;
+  /// Windows and Linux run GGUF through llama.cpp only; LiteRT and Stable
+  /// Diffusion models have no desktop runtime.
+  static bool get isDesktopGgufOnly => Platform.isWindows || Platform.isLinux;
 
   /// Local image generation needs stable-diffusion.cpp, which is Android/iOS
   /// only for now.
-  static bool get supportsImageModels => !isWindows;
+  static bool get supportsImageModels => !isDesktopGgufOnly;
 
   static const localFilters = [
     'general',
@@ -89,7 +89,7 @@ class ModelController extends GetxController {
     // Loading a model doesn't move it: the list keeps its normal order and
     // the loaded model is marked in place.
     final models = [...availableModels];
-    if (isWindows) models.removeWhere((m) => !isLlamaModel(m));
+    if (isDesktopGgufOnly) models.removeWhere((m) => !isLlamaModel(m));
     models.sort((a, b) {
       final aDownloaded = isDownloaded(a.filename);
       final bDownloaded = isDownloaded(b.filename);
@@ -153,8 +153,8 @@ class ModelController extends GetxController {
         .map((m) => AiModel.fromMap(m))
         // Core ML (Apple NPU) models only run on iOS/macOS.
         .where((m) => supportsAppleNpu || !isNpuModel(m))
-        // Windows has no LiteRT or Stable Diffusion runtime.
-        .where((m) => !isWindows || isLlamaModel(m))
+        // Desktop builds have no LiteRT or Stable Diffusion runtime.
+        .where((m) => !isDesktopGgufOnly || isLlamaModel(m))
         .toList()
       ..addAll(customModels);
     refreshDownloaded();
@@ -197,7 +197,7 @@ class ModelController extends GetxController {
       return m.filename;
     }).toSet();
     for (final file in files) {
-      if (isWindows && !file.toLowerCase().endsWith('.gguf')) continue;
+      if (isDesktopGgufOnly && !file.toLowerCase().endsWith('.gguf')) continue;
       if (!existingFilenames.contains(file)) {
         // An imported copy of a catalogue vision model (any capitalisation,
         // e.g. the original Hugging Face name) keeps the catalogue's vision
@@ -671,7 +671,7 @@ class ModelController extends GetxController {
       );
       return;
     }
-    // The phone cluster splits GGUF models only (llama.cpp); a LiteRT model
+    // The AI cluster splits GGUF models only (llama.cpp); a LiteRT model
     // always runs on this phone, so say so instead of silently ignoring the
     // workers.
     if (isLiteRt &&
@@ -869,7 +869,7 @@ class ModelController extends GetxController {
     required int fileBytes,
     required bool isLiteRt,
   }) async {
-    // Phone cluster: the model is split across phones, so this phone's free
+    // AI cluster: the model is split across devices, so this device's free
     // memory alone says little. ClusterService checks the whole cluster's
     // memory (and offers this-phone-only when it fits) right before loading.
     if (!isLiteRt &&
@@ -1156,9 +1156,9 @@ class ModelController extends GetxController {
         final filename = picked.name;
         final lower = filename.toLowerCase();
 
-        if (isWindows && !lower.endsWith('.gguf')) {
+        if (isDesktopGgufOnly && !lower.endsWith('.gguf')) {
           showToast('Unsupported Model',
-              'Windows can only run GGUF models. Import a .gguf file.',
+              'Desktop builds can only run GGUF models. Import a .gguf file.',
               tone: ToastTone.warning);
           return;
         }
@@ -1441,7 +1441,8 @@ class ModelController extends GetxController {
         if (lower.endsWith('.download')) {
           final target = name.substring(0, name.length - '.download'.length);
           if (busy.contains(target)) continue;
-          if (await File(p.join(dir.path, target)).exists()) await entity.delete();
+          if (await File(p.join(dir.path, target)).exists())
+            await entity.delete();
           continue;
         }
         if (!lower.endsWith('.part')) continue;
@@ -1454,11 +1455,12 @@ class ModelController extends GetxController {
     } catch (_) {}
   }
 
-  /// Phone cluster errors (from ClusterService or the native cluster setup)
+  /// AI cluster errors (from ClusterService or the native cluster setup)
   /// already say what to do; anything else gets the generic tips.
   static bool _isClusterError(String rawError) {
     final lower = rawError.toLowerCase();
-    return lower.contains('phone cluster') ||
+    return lower.contains('ai cluster') ||
+        lower.contains('phone cluster') ||
         lower.contains('worker') ||
         lower.contains('cluster:') ||
         lower.contains('too big for these');
@@ -1518,7 +1520,7 @@ class ModelController extends GetxController {
     bool showDetails = false;
     showAppSheet<void>(
       context,
-      title: isCluster ? 'Phone cluster couldn\'t load' : 'Model load failed',
+      title: isCluster ? 'AI cluster couldn\'t load' : 'Model load failed',
       subtitle: friendlyMsg,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setState) {
@@ -1530,7 +1532,7 @@ class ModelController extends GetxController {
                   padding: EdgeInsets.fromLTRB(0, 0, 0, 10)),
               if (isCluster) ...[
                 _buildTipRow(ctx, Icons.hub_outlined,
-                    'On each worker, open PrivateLM > Phone cluster and check that Worker is on and shows its QR code.'),
+                    'On each worker, open PrivateLM > AI cluster and check that Worker is on and shows its QR code.'),
                 _buildTipRow(ctx, Icons.wifi_rounded,
                     'Keep every device on the same Wi-Fi. iPads must keep PrivateLM open.'),
               ] else ...[

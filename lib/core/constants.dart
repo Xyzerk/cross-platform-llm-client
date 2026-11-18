@@ -72,6 +72,16 @@ class AppConstants {
 
   /// This device's lasting worker ID, so a master finds it after an IP change.
   static const String keyClusterWorkerId = 'cluster_worker_id';
+
+  /// adb forward/reverse mappings created for USB workers, so they can be
+  /// removed on role change or app exit.
+  static const String keyClusterUsbBridges = 'cluster_usb_bridges';
+
+  /// Offer Tailscale/VPN interfaces in the cluster picker (default off).
+  static const String keyClusterIncludeVpn = 'cluster_include_vpn';
+
+  /// Bind the worker to one address instead of all interfaces (empty = all).
+  static const String keyClusterBindHost = 'cluster_bind_host';
   static const String keyImageSteps = 'image_steps';
   static const String keyImageGenForceCpu = 'image_gen_force_cpu';
   static const String keyImageGenBackend = 'image_gen_backend';
@@ -183,7 +193,7 @@ class AppConstants {
           'https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-IQ2_M.gguf',
       'size': '10.0 GB',
       'description':
-          'Google Gemma 4 MoE, 4B active — too big for one phone: run it as a Phone cluster master with workers (~11 GB free across devices)',
+          'Google Gemma 4 MoE, 4B active — too big for one device: run it as an AI cluster master with workers (~11 GB free across devices)',
       'template': 'gemma',
     },
     {

@@ -13,9 +13,9 @@ import 'hive_service.dart';
 import 'sd_isolate_processor.dart';
 
 class LocalImageService extends GetxService {
-  /// Stable Diffusion models run on Android and iOS only; Windows has no
-  /// stable-diffusion.cpp build yet.
-  static bool get isSupported => !Platform.isWindows;
+  /// Stable Diffusion models run on Android and iOS only; there is no
+  /// stable-diffusion.cpp build for Windows or Linux yet.
+  static bool get isSupported => Platform.isAndroid || Platform.isIOS;
 
   final HiveService _hive = Get.find<HiveService>();
 
@@ -144,7 +144,7 @@ class LocalImageService extends GetxService {
   Future<String> loadModel(String modelPath,
       {String? modelName, String? taesdPath}) async {
     if (!isSupported) {
-      return 'Local image generation is not available on Windows.';
+      return 'Local image generation is not available on this platform.';
     }
     if (isLoadingModel.value) return 'ERROR: Model is already loading.';
     if (_nativeJobRunning) {

@@ -141,7 +141,7 @@ class ModelView extends GetView<ModelController> {
     showAppSheet<void>(
       context,
       title: 'Import model',
-      subtitle: ModelController.isWindows
+      subtitle: ModelController.isDesktopGgufOnly
           ? 'Add a .gguf model from this PC.'
           : 'Add .gguf, .litertlm or .safetensors files from your phone.',
       builder: (ctx) => AppGroup(dividerIndent: 60, children: [
@@ -175,7 +175,7 @@ class ModelView extends GetView<ModelController> {
     if (files == null || !context.mounted) return;
     if (files.isEmpty) {
       showToast('No models found',
-          ModelController.isWindows
+          ModelController.isDesktopGgufOnly
               ? 'That folder has no .gguf files.'
               : 'That folder has no .gguf, .litertlm or .safetensors files.',
           tone: ToastTone.warning);

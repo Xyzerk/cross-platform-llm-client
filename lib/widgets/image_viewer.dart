@@ -43,8 +43,8 @@ class _ImageViewerState extends State<ImageViewer> {
   Future<void> _download() async {
     setState(() => _isSaving = true);
     try {
-      if (Platform.isWindows) {
-        // Windows has no gallery: let the user choose where to save instead.
+      if (Platform.isWindows || Platform.isLinux) {
+        // Desktop has no gallery: let the user choose where to save instead.
         final path = await FilePicker.saveFile(
           dialogTitle: 'Save image',
           fileName:

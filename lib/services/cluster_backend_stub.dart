@@ -16,6 +16,7 @@ class UnsupportedClusterBackend implements ClusterBackend {
     int port = ClusterBackend.defaultPort,
     int? threads,
     String? advertiseIp,
+    String? bindHost,
   }) =>
       _unsupported();
 
