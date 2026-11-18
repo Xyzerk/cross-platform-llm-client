@@ -1,15 +1,14 @@
-// End-to-end test of the Windows cluster master (Phase 5 of
-// docs/windows-port-plan.md): a real privatelm_rpc_worker.exe on this PC,
-// a cluster plan handed to the plugin DLL, and a load that makes the master
-// connect to the worker over llama.cpp's RPC protocol.
+// End-to-end test of the desktop cluster master (Windows and Linux): a real
+// privatelm_rpc_worker on this PC, a cluster plan handed to the plugin library,
+// and a load that makes the master connect to the worker over llama.cpp's RPC
+// protocol.
 //
 // The model is a metadata-only GGUF stub: it carries an architecture and a
 // block count, which is all the native planner reads, then fails to load (as
 // it must). The interesting part is the handshake before that failure: the
 // worker logs the master's address. That needs no real model, but does need a
-// built app (`flutter build windows`), so the test skips on machines that
-// never built one.
-@TestOn('windows')
+// built app, so the test skips on machines that never built one.
+@TestOn('windows || linux')
 library;
 
 import 'dart:convert';
@@ -21,18 +20,26 @@ import 'package:ffi/ffi.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:llama_flutter_android/llama_flutter_android.dart';
 import 'package:path/path.dart' as p;
-import 'package:privatelm/services/cluster_windows_backend.dart';
+import 'package:privatelm/services/cluster_desktop_backend.dart';
 
-/// The worker is resolved like WindowsClusterBackend does, so a debug or
+/// The worker is resolved like DesktopClusterBackend does, so a debug or
 /// release build both work.
 String? _workerExe() {
   final override = Platform.environment['PRIVATELM_TEST_WORKER'];
   if (override != null && override.isNotEmpty) {
     return File(override).existsSync() ? override : null;
   }
-  for (final config in ['Debug', 'Profile', 'Release']) {
+  if (Platform.isWindows) {
+    for (final config in ['Debug', 'Profile', 'Release']) {
+      final candidate =
+          File('build/windows/x64/runner/$config/privatelm_rpc_worker.exe');
+      if (candidate.existsSync()) return candidate.absolute.path;
+    }
+    return null;
+  }
+  for (final mode in ['debug', 'profile', 'release']) {
     final candidate =
-        File('build/windows/x64/runner/$config/privatelm_rpc_worker.exe');
+        File('build/linux/x64/$mode/bundle/lib/privatelm_rpc_worker');
     if (candidate.existsSync()) return candidate.absolute.path;
   }
   return null;
@@ -43,9 +50,17 @@ String? _dll() {
   if (override != null && override.isNotEmpty) {
     return File(override).existsSync() ? override : null;
   }
-  for (final config in ['Debug', 'Profile', 'Release']) {
-    final candidate =
-        File('build/windows/x64/runner/$config/llama_flutter_android.dll');
+  if (Platform.isWindows) {
+    for (final config in ['Debug', 'Profile', 'Release']) {
+      final candidate =
+          File('build/windows/x64/runner/$config/llama_flutter_android.dll');
+      if (candidate.existsSync()) return candidate.absolute.path;
+    }
+    return null;
+  }
+  for (final mode in ['debug', 'profile', 'release']) {
+    final candidate = File(
+        'build/linux/x64/$mode/bundle/lib/libllama_flutter_android.so');
     if (candidate.existsSync()) return candidate.absolute.path;
   }
   return null;
@@ -55,16 +70,15 @@ void main() {
   final exe = _workerExe();
   final dll = _dll();
   if (exe == null || dll == null) {
-    test('Windows master (build the Windows app to run this)', () {},
-        skip: 'privatelm_rpc_worker.exe or llama_flutter_android.dll is not '
-            'built');
+    test('Desktop master (build the desktop app to run this)', () {},
+        skip: 'privatelm_rpc_worker or the plugin library is not built');
     return;
   }
 
   const port = 50180;
 
   test('plans a load onto a real worker and connects over RPC', () async {
-    final backend = WindowsClusterBackend(workerExe: exe, dllPath: dll);
+    final backend = DesktopClusterBackend(workerExe: exe, dllPath: dll);
     final dir = await Directory.systemTemp.createTemp('plm_master_');
     // A status file of its own, so this test never races the worker test (or a
     // worker the developer is running) over the shared app status file.
@@ -73,7 +87,7 @@ void main() {
     await stub.writeAsBytes(_stubGguf(blockCount: 4));
 
     // Started with pipes (not detached) so the worker's own log proves the
-    // master connected. WindowsClusterBackend only needs the status file.
+    // master connected. DesktopClusterBackend only needs the status file.
     final worker = await Process.start(exe, [
       '--host', '0.0.0.0',
       '--port', '$port',

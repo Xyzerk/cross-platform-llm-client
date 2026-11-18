@@ -1,6 +1,6 @@
-// Windows-only: ClusterService.isSupported is false on the CI host (Linux), so
-// these role/load-planning paths can only be exercised on a Windows machine.
-@TestOn('windows')
+// Desktop cluster paths. ClusterService supports both Windows and Linux, and
+// the fake backend keeps the tests independent of adb/Tailscale/processes.
+@TestOn('linux || windows')
 library;
 
 import 'dart:io';
@@ -19,6 +19,8 @@ class _FakeBackend implements ClusterBackend {
   final started = <String>[];
   final stopped = <String>[];
   int clearCalls = 0;
+  String? lastBindHost;
+  String? lastAdvertiseIp;
   int? localFreeRam;
   double speed = 10;
   List<ClusterWorker>? clusterWorkers;
@@ -33,10 +35,13 @@ class _FakeBackend implements ClusterBackend {
     int port = ClusterBackend.defaultPort,
     int? threads,
     String? advertiseIp,
+    String? bindHost,
   }) async {
     started.add('$port');
-    status = const ClusterWorkerStatus(
-        state: 'running', ramMb: 4096, bandwidth: 12);
+    lastAdvertiseIp = advertiseIp;
+    lastBindHost = bindHost;
+    status =
+        const ClusterWorkerStatus(state: 'running', ramMb: 4096, bandwidth: 12);
   }
 
   @override
@@ -149,6 +154,19 @@ void main() {
     expect(backend.started, hasLength(1));
     expect(service.worker.value.running, isTrue);
     expect(hive.getSetting<bool>(AppConstants.keyClusterEnabled), isFalse);
+  });
+
+  test('the worker can be bound to one interface', () async {
+    await service.setWorkerBindHost('192.168.1.10');
+    await service.startWorker();
+
+    expect(backend.lastBindHost, '192.168.1.10');
+    expect(backend.lastAdvertiseIp, '192.168.1.10');
+    expect(hive.getSetting<String>(AppConstants.keyClusterBindHost),
+        '192.168.1.10');
+
+    await service.setWorkerBindHost(null);
+    expect(hive.getSetting<String>(AppConstants.keyClusterBindHost), '');
   });
 
   test('applyForNextLoad clears the cluster when disabled', () async {
