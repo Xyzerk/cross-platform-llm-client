@@ -1,13 +1,17 @@
-// Windows cluster transport.
+// Desktop cluster transport (Windows and Linux).
 //
 // Android and iOS host the RPC worker inside the app's own process tree (a
-// foreground service). Windows can't: ggml_backend_rpc_start_server blocks
+// foreground service). Desktop can't: ggml_backend_rpc_start_server blocks
 // forever and has no stop call, so the worker lives in
-// `privatelm_rpc_worker.exe` and this class just starts, watches and kills it.
+// `privatelm_rpc_worker[.exe]` and this class just starts, watches and kills it.
 //
 // The worker writes a small JSON status file every second (it can't talk to
 // Dart), which is what workerStatus() reads. Everything else goes through the
-// plugin DLL, the same native engine the app runs models with.
+// plugin library, the same native engine the app runs models with.
+//
+// Windows and Linux differ only in paths, firewall handling, keep-awake, the
+// executable suffix and how the worker's lifetime is tied to the app (a job
+// object on Windows, a parent-pid watchdog in the worker on Linux).
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
@@ -23,23 +27,33 @@ import 'package:uuid/uuid.dart';
 
 import '../core/constants.dart';
 import 'cluster_backend.dart';
+import 'cluster_endpoint.dart';
 import 'hive_service.dart';
 
-/// Windows: runs this PC as a cluster worker, and can plan a load across
+/// Windows/Linux: runs this PC as a cluster worker, and can plan a load across
 /// workers the way the Android backend does.
-class WindowsClusterBackend implements ClusterBackend {
-  WindowsClusterBackend({String? workerExe, String? dllPath})
+class DesktopClusterBackend implements ClusterBackend {
+  DesktopClusterBackend({String? workerExe, String? dllPath})
       : _workerExeOverride = workerExe,
         _dllPathOverride = dllPath;
 
   /// Test/developer override for the worker binary.
   final String? _workerExeOverride;
 
-  /// Test/developer override for the plugin DLL the master path calls.
+  /// Test/developer override for the plugin library the master path calls.
   final String? _dllPathOverride;
 
-  static const _exeName = 'privatelm_rpc_worker.exe';
-  static const _dllName = 'llama_flutter_android.dll';
+  /// Windows Firewall blocks inbound connections by default, which is the
+  /// most common reason a master can't reach this PC. On Linux the app never
+  /// elevates: the UI shows a ufw/firewalld hint instead.
+  bool get _isWindows => Platform.isWindows;
+
+  String get _workerExeName =>
+      _isWindows ? 'privatelm_rpc_worker.exe' : 'privatelm_rpc_worker';
+
+  static String get _dllName => Platform.isWindows
+      ? 'llama_flutter_android.dll'
+      : 'libllama_flutter_android.so';
 
   /// The DNS-SD type every PrivateLM worker advertises.
   static const _serviceType = '_privatelm._tcp.local';
@@ -57,6 +71,7 @@ class WindowsClusterBackend implements ClusterBackend {
   int? _pid;
   Process? _process;
   Pointer<Void> _job = nullptr;
+  Process? _inhibitor;
   bool _keepAwake = false;
   String? _fallbackId;
 
@@ -67,13 +82,16 @@ class WindowsClusterBackend implements ClusterBackend {
     int port = ClusterBackend.defaultPort,
     int? threads,
     String? advertiseIp,
+    String? bindHost,
   }) async {
     if (await _isRunning()) return;
 
     final exe = _workerExe();
     if (exe == null) {
-      throw Exception('$_exeName is missing next to PrivateLM. Reinstall the '
-          'app, or run a full `flutter build windows`.');
+      final build =
+          _isWindows ? 'flutter build windows' : 'flutter build linux';
+      throw Exception('$_workerExeName is missing next to PrivateLM. Reinstall '
+          'the app, or run a full `$build`.');
     }
 
     Directory(_cacheDir).createSync(recursive: true);
@@ -81,7 +99,7 @@ class WindowsClusterBackend implements ClusterBackend {
     _deleteStatusFile();
 
     final args = <String>[
-      '--host', '0.0.0.0',
+      '--host', bindHost ?? '0.0.0.0',
       '--port', '$port',
       // 0 lets the worker pick one thread per core, capped at 16.
       '--threads', '${threads ?? 0}',
@@ -91,7 +109,8 @@ class WindowsClusterBackend implements ClusterBackend {
       '--model', Platform.localHostname,
       '--parent-pid', '$pid',
       if (advertiseIp != null && advertiseIp.isNotEmpty) ...[
-        '--advertise-ip', advertiseIp,
+        '--advertise-ip',
+        advertiseIp,
       ],
     ];
 
@@ -118,8 +137,7 @@ class WindowsClusterBackend implements ClusterBackend {
 
     await _kill();
     throw Exception('The cluster worker did not start within '
-        '${_startTimeout.inSeconds} seconds. Allow PrivateLM through Windows '
-        'Firewall, then try again.');
+        '${_startTimeout.inSeconds} seconds. ${_startHint()}');
   }
 
   @override
@@ -164,17 +182,7 @@ class WindowsClusterBackend implements ClusterBackend {
         DateTime.now().difference(file.modified) >= _staleAfter) {
       return const ClusterWorkerStatus(state: 'stopped');
     }
-    final error = _text(file.json['error']);
-    return ClusterWorkerStatus(
-      // A worker that reported a reason never got as far as running.
-      state: error != null && state != 'running' ? 'error' : state,
-      error: error,
-      peer: _text(file.json['peer']),
-      heldMb: (file.json['heldMb'] as num?)?.toInt() ?? 0,
-      ramMb: (file.json['ramMb'] as num?)?.toInt() ?? 0,
-      bandwidth: (file.json['bandwidth'] as num?)?.toDouble() ?? 0,
-      id: _text(file.json['id']),
-    );
+    return ClusterWorkerStatus.fromMap(file.json);
   }
 
   /// A PC has no battery optimization to opt out of.
@@ -184,12 +192,16 @@ class WindowsClusterBackend implements ClusterBackend {
   /// Windows Firewall blocks inbound connections by default, which is the
   /// most common reason a master can't reach this PC. The rule is named after
   /// the app so the check is cheap and repeatable.
+  ///
+  /// Linux returns null on purpose: there is no elevation-free way to read
+  /// ufw/firewalld state, and the app never asks for a password. The cluster
+  /// screen shows the `ufw`/`firewall-cmd` command instead.
   @override
   Future<bool?> firewallReady() async {
-    if (!Platform.isWindows) return null;
+    if (!_isWindows) return null;
     try {
-      final result = await Process.run(
-          'netsh', ['advfirewall', 'firewall', 'show', 'rule', 'name=$_firewallRule']);
+      final result = await Process.run('netsh',
+          ['advfirewall', 'firewall', 'show', 'rule', 'name=$_firewallRule']);
       return result.exitCode == 0;
     } catch (_) {
       // Can't tell: don't nag with a warning that may be wrong.
@@ -199,7 +211,7 @@ class WindowsClusterBackend implements ClusterBackend {
 
   @override
   Future<void> allowFirewall() async {
-    if (!Platform.isWindows) return;
+    if (!_isWindows) return;
     // netsh needs elevation; PowerShell shows the UAC prompt and waits, so
     // the caller can re-check the rule afterwards.
     await Process.run('powershell', [
@@ -213,12 +225,51 @@ class WindowsClusterBackend implements ClusterBackend {
     ]);
   }
 
+  String _startHint() => _isWindows
+      ? 'Allow PrivateLM through Windows Firewall, then try again.'
+      : 'Allow port ${ClusterBackend.defaultPort} through your firewall, then '
+          'try again.';
+
   /// Keeps the machine (and so the worker) from idling while it serves a
-  /// master. ES_CONTINUOUS makes the flag stick until it is cleared.
+  /// master.
+  ///
+  /// Windows: ES_CONTINUOUS makes the flag stick until it is cleared.
+  /// Linux: a `systemd-inhibit` child holds an idle inhibitor; killing it
+  /// releases the lock. Hosts without systemd simply skip this.
   @override
   Future<void> setKeepScreenOn(bool on) async {
     if (_keepAwake == on) return;
     _keepAwake = on;
+    if (!_isWindows) {
+      if (on) {
+        try {
+          _inhibitor = await Process.start(
+            'systemd-inhibit',
+            [
+              '--what=idle',
+              '--who=PrivateLM',
+              '--why=Serving a PrivateLM cluster worker',
+              '--mode=block',
+              'sleep',
+              'infinity',
+            ],
+            mode: ProcessStartMode.detached,
+          );
+        } catch (_) {
+          // No systemd-inhibit (or no systemd): sharing still works.
+          _inhibitor = null;
+        }
+      } else {
+        final inhibitor = _inhibitor;
+        _inhibitor = null;
+        try {
+          inhibitor?.kill();
+        } catch (_) {
+          // Already exited.
+        }
+      }
+      return;
+    }
     final kernel = _kernel32;
     if (kernel == null) return;
     kernel.setThreadExecutionState(on ? 0x80000001 : 0x80000000);
@@ -292,12 +343,14 @@ class WindowsClusterBackend implements ClusterBackend {
 
   @override
   Future<bool> probe(String endpoint) async {
-    final colon = endpoint.lastIndexOf(':');
-    if (colon <= 0) return false;
-    final port = int.tryParse(endpoint.substring(colon + 1));
-    if (port == null) return false;
+    final ClusterEndpoint parsed;
     try {
-      final socket = await Socket.connect(endpoint.substring(0, colon), port,
+      parsed = ClusterEndpoint.parse(endpoint);
+    } on FormatException {
+      return false;
+    }
+    try {
+      final socket = await Socket.connect(parsed.host, parsed.port,
           timeout: const Duration(seconds: 2));
       socket.destroy();
       return true;
@@ -355,25 +408,52 @@ class WindowsClusterBackend implements ClusterBackend {
   // ── Files ──────────────────────────────────────────────────────────────
 
   String get _baseDir {
-    final local = Platform.environment['LOCALAPPDATA'];
-    final root = local == null || local.isEmpty
+    if (_isWindows) {
+      final local = Platform.environment['LOCALAPPDATA'];
+      final root = local == null || local.isEmpty
+          ? Directory.systemTemp.path
+          : p.join(local, 'PrivateLM');
+      return p.join(root, 'cluster');
+    }
+    // XDG_STATE_HOME is the right place for per-user state; ~/.local/state is
+    // its documented fallback.
+    final state = Platform.environment['XDG_STATE_HOME'];
+    if (state != null && state.isNotEmpty) {
+      return p.join(state, 'privatelm', 'cluster');
+    }
+    final home = Platform.environment['HOME'];
+    final root = home == null || home.isEmpty
         ? Directory.systemTemp.path
-        : p.join(local, 'PrivateLM');
-    return p.join(root, 'cluster');
+        : p.join(home, '.local', 'state');
+    return p.join(root, 'privatelm', 'cluster');
   }
 
   String get _statusPath => p.join(_baseDir, 'worker.json');
 
   String get _cacheDir => p.join(_baseDir, 'cache');
 
+  /// Finds the worker: next to the app (Windows), in the bundle's lib/ (Linux
+  /// ships it as a bundled library), in the launch directory, then on PATH.
   String? _workerExe() {
     if (_workerExeOverride != null) return _workerExeOverride;
     final override = Platform.environment['PRIVATELM_TEST_WORKER'];
     if (override != null && override.isNotEmpty) return override;
     final exeDir = File(Platform.resolvedExecutable).parent.path;
-    for (final dir in [exeDir, Directory.current.path]) {
-      final candidate = p.join(dir, _exeName);
+    for (final dir in [
+      exeDir,
+      p.join(exeDir, 'lib'),
+      Directory.current.path,
+    ]) {
+      final candidate = p.join(dir, _workerExeName);
       if (File(candidate).existsSync()) return candidate;
+    }
+    final path = Platform.environment['PATH'];
+    if (path != null && path.isNotEmpty) {
+      for (final dir in path.split(Platform.isWindows ? ';' : ':')) {
+        if (dir.isEmpty) continue;
+        final candidate = p.join(dir, _workerExeName);
+        if (File(candidate).existsSync()) return candidate;
+      }
     }
     return null;
   }
@@ -488,8 +568,9 @@ class WindowsClusterBackend implements ClusterBackend {
     if (txt['v'] != null && txt['v'] != 'rpc7') return null;
 
     const suffix = '.$_serviceType';
-    final instance =
-        name.endsWith(suffix) ? name.substring(0, name.length - suffix.length) : name;
+    final instance = name.endsWith(suffix)
+        ? name.substring(0, name.length - suffix.length)
+        : name;
     return ClusterWorker(
       name: instance,
       host: host,
@@ -526,7 +607,9 @@ class WindowsClusterBackend implements ClusterBackend {
           // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
           info.ref.basicLimitInformation.limitFlags = 0x2000;
           final ok = kernel.setInformationJobObject(
-              job, 9 /* JobObjectExtendedLimitInformation */, info.cast(),
+              job,
+              9 /* JobObjectExtendedLimitInformation */,
+              info.cast(),
               sizeOf<_JobExtendedLimit>());
           if (ok == 0) {
             kernel.closeHandle(job);
@@ -555,9 +638,14 @@ class WindowsClusterBackend implements ClusterBackend {
   }
 
   bool _pidAlive(int childPid) {
+    if (!_isWindows) {
+      // A detached child is reaped by Dart, so its /proc entry disappears.
+      return Directory('/proc/$childPid').existsSync();
+    }
     final kernel = _kernel32;
     if (kernel == null) return false;
-    final handle = kernel.openProcess(0x00100000 /* SYNCHRONIZE */, 0, childPid);
+    final handle =
+        kernel.openProcess(0x00100000 /* SYNCHRONIZE */, 0, childPid);
     if (handle == nullptr) return false;
     final result = kernel.waitForSingleObject(handle, 0);
     kernel.closeHandle(handle);
@@ -585,32 +673,38 @@ class _Engine {
       return _Engine(DynamicLibrary.open(path));
     }
     final exeDir = File(Platform.resolvedExecutable).parent.path;
-    final bundled = p.join(exeDir, WindowsClusterBackend._dllName);
-    return _Engine(DynamicLibrary.open(
-        File(bundled).existsSync() ? bundled : WindowsClusterBackend._dllName));
+    // Windows keeps the DLL next to the executable; Linux installs it as a
+    // bundled library in lib/.
+    final candidates = [
+      p.join(exeDir, DesktopClusterBackend._dllName),
+      p.join(exeDir, 'lib', DesktopClusterBackend._dllName),
+    ];
+    final bundled = candidates.firstWhere(
+      (candidate) => File(candidate).existsSync(),
+      orElse: () => DesktopClusterBackend._dllName,
+    );
+    return _Engine(DynamicLibrary.open(bundled));
   }
 
   final DynamicLibrary _library;
 
-  late final int Function() freeRamMb =
-      _library.lookupFunction<Int32 Function(), int Function()>(
-          'plm_free_ram_mb');
+  late final int Function() freeRamMb = _library
+      .lookupFunction<Int32 Function(), int Function()>('plm_free_ram_mb');
 
   late final double Function() benchmark =
       _library.lookupFunction<Double Function(), double Function()>(
           'plm_benchmark_bandwidth');
 
-  late final Pointer<Utf8> Function() lastLoadBuffers =
-      _library.lookupFunction<Pointer<Utf8> Function(),
-          Pointer<Utf8> Function()>('plm_last_load_buffers');
+  late final Pointer<Utf8> Function() lastLoadBuffers = _library.lookupFunction<
+      Pointer<Utf8> Function(),
+      Pointer<Utf8> Function()>('plm_last_load_buffers');
 
-  late final void Function(Pointer<Utf8>) freeString =
-      _library.lookupFunction<Void Function(Pointer<Utf8>),
-          void Function(Pointer<Utf8>)>('plm_free_string');
+  late final void Function(Pointer<Utf8>) freeString = _library.lookupFunction<
+      Void Function(Pointer<Utf8>),
+      void Function(Pointer<Utf8>)>('plm_free_string');
 
-  late final void Function(
-      Pointer<Pointer<Utf8>>, Pointer<Float>, int, double) setCluster =
-      _library.lookupFunction<
+  late final void Function(Pointer<Pointer<Utf8>>, Pointer<Float>, int, double)
+      setCluster = _library.lookupFunction<
           Void Function(Pointer<Pointer<Utf8>>, Pointer<Float>, Int32, Float),
           void Function(Pointer<Pointer<Utf8>>, Pointer<Float>, int,
               double)>('plm_set_cluster');
@@ -626,8 +720,8 @@ class _Kernel32 {
   late final Pointer<Void> Function(Pointer<Utf16>, Pointer<Utf16>)
       createJobObject = _library.lookupFunction<
           Pointer<Void> Function(Pointer<Utf16>, Pointer<Utf16>),
-          Pointer<Void> Function(Pointer<Utf16>, Pointer<Utf16>)>(
-      'CreateJobObjectW');
+          Pointer<Void> Function(
+              Pointer<Utf16>, Pointer<Utf16>)>('CreateJobObjectW');
 
   late final int Function(Pointer<Void>, int, Pointer<Void>, int)
       setInformationJobObject = _library.lookupFunction<
@@ -638,8 +732,8 @@ class _Kernel32 {
   late final int Function(Pointer<Void>, Pointer<Void>)
       assignProcessToJobObject = _library.lookupFunction<
           Int32 Function(Pointer<Void>, Pointer<Void>),
-          int Function(Pointer<Void>, Pointer<Void>)>(
-      'AssignProcessToJobObject');
+          int Function(
+              Pointer<Void>, Pointer<Void>)>('AssignProcessToJobObject');
 
   late final Pointer<Void> Function(int, int, int) openProcess =
       _library.lookupFunction<Pointer<Void> Function(Int32, Int32, Int32),
@@ -649,9 +743,9 @@ class _Kernel32 {
       _library.lookupFunction<Int32 Function(Pointer<Void>, Int32),
           int Function(Pointer<Void>, int)>('WaitForSingleObject');
 
-  late final int Function(Pointer<Void>) closeHandle =
-      _library.lookupFunction<Int32 Function(Pointer<Void>),
-          int Function(Pointer<Void>)>('CloseHandle');
+  late final int Function(Pointer<Void>) closeHandle = _library.lookupFunction<
+      Int32 Function(Pointer<Void>),
+      int Function(Pointer<Void>)>('CloseHandle');
 
   late final int Function(int) setThreadExecutionState =
       _library.lookupFunction<Uint32 Function(Uint32), int Function(int)>(

@@ -57,7 +57,9 @@ void main() {
 
     // Support phones and tablets in portrait or landscape. Desktops have no
     // orientation to lock.
-    if (!kIsWeb && defaultTargetPlatform != TargetPlatform.windows) {
+    if (!kIsWeb &&
+        defaultTargetPlatform != TargetPlatform.windows &&
+        defaultTargetPlatform != TargetPlatform.linux) {
       await SystemChrome.setPreferredOrientations([
         DeviceOrientation.portraitUp,
         DeviceOrientation.landscapeLeft,
@@ -94,13 +96,14 @@ void main() {
     Get.put(DownloadService());
     if (UpdateService.isSupported) Get.put(UpdateService(), permanent: true);
     Get.put(LocalImageService());
-    final crashReporting = await Get.putAsync(() => CrashReportingService().init().timeout(
-          const Duration(seconds: 10),
-          onTimeout: () {
-            appLog.error('CrashReportingService.init timed out');
-            return CrashReportingService();
-          },
-        ));
+    final crashReporting =
+        await Get.putAsync(() => CrashReportingService().init().timeout(
+              const Duration(seconds: 10),
+              onTimeout: () {
+                appLog.error('CrashReportingService.init timed out');
+                return CrashReportingService();
+              },
+            ));
     FlutterError.onError = (details) {
       FlutterError.presentError(details);
       appLog.error(
@@ -136,6 +139,20 @@ void main() {
     _validateLastModel();
 
     runApp(const PrivateLMApp());
+
+    // A USB bridge must not outlive the app: adb keeps the forward/reverse
+    // listener after this process ends. Clean up on detach/exit as well as on
+    // a role change; the next launch also removes stale mappings.
+    if (Get.isRegistered<ClusterService>()) {
+      final cluster = Get.find<ClusterService>();
+      AppLifecycleListener(
+        onDetach: () => unawaited(cluster.releaseUsbBridges()),
+        onExitRequested: () async {
+          await cluster.releaseUsbBridges();
+          return AppExitResponse.exit;
+        },
+      );
+    }
 
     // Apply system UI after frame is rendered so Get.mediaQuery is available
     WidgetsBinding.instance.addPostFrameCallback((_) {

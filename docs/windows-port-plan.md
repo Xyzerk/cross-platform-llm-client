@@ -187,7 +187,7 @@ The current engine lives in `local_plugins/llama_flutter_android/android/src/mai
    lib/src/llama_host_stub.dart     # web no-op
    lib/src/llama_host_pigeon.dart   # current LlamaHostApi
    lib/src/llama_host_ffi.dart      # Windows FFI implementation
-   lib/src/llama_windows_ffi.dart   # FFI typedefs / DynamicLibrary.open
+   lib/src/llama_desktop_ffi.dart   # FFI typedefs / DynamicLibrary.open
    ```
    - `llama_host.dart` uses a conditional export so web never sees `dart:ffi`.
    - `llama_host_io.dart` returns `LlamaHostPigeon()` on Android/iOS and `LlamaHostFfi()` on Windows.
@@ -491,7 +491,7 @@ Status: implemented. `lib/services/cluster_planner.dart`,
 | `lib/src/llama_host_stub.dart`                    | New web no-op                             |
 | `lib/src/llama_host_pigeon.dart`                  | New wrapper around `LlamaHostApi`         |
 | `lib/src/llama_host_ffi.dart`                     | New Windows FFI host                      |
-| `lib/src/llama_windows_ffi.dart`                  | New FFI bindings                          |
+| `lib/src/llama_desktop_ffi.dart`                  | New FFI bindings                          |
 | `lib/src/llama_controller.dart`                   | Use `LlamaHost` instead of `LlamaHostApi` |
 | `lib/llama_flutter_android.dart`                  | Export new host types if needed           |
 | `android/src/main/cpp/jni_wrapper.cpp`            | Thin JNI adapter over the core            |

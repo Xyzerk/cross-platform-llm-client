@@ -1,9 +1,9 @@
 // Platform-neutral inference engine, extracted from jni_wrapper.cpp so that
-// Android (JNI) and Windows (FFI) run the exact same model lifecycle,
+// Android (JNI) and desktop (FFI) run the exact same model lifecycle,
 // generation loop, sampling chain and vision pipeline from one copy.
 //
 // The engine owns the process-global model/context state; the marshalling
-// layers (jni_wrapper.cpp, windows/llama_ffi.cpp) only translate parameters
+// layers (jni_wrapper.cpp, desktop src/llama_ffi.cpp) only translate parameters
 // and callbacks. One generation runs at a time, on the caller's thread.
 #pragma once
 

@@ -66,13 +66,17 @@ class UpdateService extends GetxService with WidgetsBindingObserver {
 
   static bool get isSupported => !kIsWeb && Platform.isAndroid;
 
-  /// Opens the GitHub releases page in the default browser. Windows cannot
-  /// install APKs, so Settings links to the download page instead.
+  /// Opens the GitHub releases page in the default browser. Android updates
+  /// in-app; desktop links to the download page instead.
   static Future<void> openReleasesPage() async {
-    if (kIsWeb || !Platform.isWindows) return;
+    if (kIsWeb) return;
     const url =
         'https://github.com/${AppConstants.githubRepo}/releases/latest';
-    await Process.run('cmd', ['/c', 'start', '', url]);
+    if (Platform.isWindows) {
+      await Process.run('cmd', ['/c', 'start', '', url]);
+    } else if (Platform.isLinux) {
+      await Process.run('xdg-open', [url]);
+    }
   }
 
   @override

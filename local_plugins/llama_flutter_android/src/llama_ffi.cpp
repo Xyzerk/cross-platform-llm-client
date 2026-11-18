@@ -1,9 +1,16 @@
-// Windows FFI adapter over the shared engine core (src/plm_engine.cpp,
+// Desktop FFI adapter over the shared engine core (src/plm_engine.cpp,
 // src/plm_core.cpp). Marshals the C ABI in llama_ffi.h to plm:: — the same
 // code path the Android JNI layer uses.
+//
+// Built into llama_flutter_android.dll on Windows and
+// libllama_flutter_android.so on Linux. Keep the C ABI identical on both.
 #include "llama_ffi.h"
 
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 #include <cmath>
 #include <cstdio>
@@ -60,13 +67,18 @@ static std::string jsonEscape(const std::string& s) {
 // errors) is handled by plm_core's shared hook.
 // ---------------------------------------------------------------------------
 
-static void windowsLogSink(ggml_log_level level, const char* text) {
+static void plmLogSink(ggml_log_level level, const char* text) {
     if (!text) return;
     // stderr only when explicitly asked for, so a GUI run stays quiet.
     static const bool enabled = [] {
+#ifdef _WIN32
         char buf[8] = {};
         const DWORD size = GetEnvironmentVariableA("PLM_LLM_LOG", buf, sizeof(buf));
         return size > 0 && size < sizeof(buf) && buf[0] != '0';
+#else
+        const char* value = std::getenv("PLM_LLM_LOG");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+#endif
     }();
     if (!enabled) return;
     ::fprintf(stderr, "[llama:%d] %s", (int)level, text);
@@ -75,15 +87,15 @@ static void windowsLogSink(ggml_log_level level, const char* text) {
     ::fflush(stderr);
 }
 
-// Registers the Windows hooks at DLL load time; llama.cpp's static CPU (and
-// RPC) backends self-register, so no platform backend loader is needed here.
+// Registers the platform hooks at library load time; llama.cpp's static CPU
+// (and RPC) backends self-register, so no platform backend loader is needed.
 namespace {
-struct PlmWindowsHooks {
-    PlmWindowsHooks() {
-        plm::setLogSink(windowsLogSink);
+struct PlmDesktopHooks {
+    PlmDesktopHooks() {
+        plm::setLogSink(plmLogSink);
     }
 };
-static PlmWindowsHooks g_plm_hooks_init;
+static PlmDesktopHooks g_plm_hooks_init;
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -207,8 +219,8 @@ int plm_clear_context(void) {
 }
 
 char* plm_detect_gpu_json(void) {
-    // A statically linked backend (Windows Vulkan builds) is already
-    // registered; this only flips the engine's flag so detectGpu looks at it.
+    // A statically linked backend (Vulkan builds) is already registered; this
+    // only flips the engine's flag so detectGpu looks at it.
     plm::probeLinkedGpuBackend();
 
     std::string name;
@@ -225,11 +237,29 @@ char* plm_last_load_buffers(void) {
 }
 
 int plm_free_ram_mb(void) {
+#ifdef _WIN32
     MEMORYSTATUSEX status;
     ZeroMemory(&status, sizeof(status));
     status.dwLength = sizeof(status);
     if (!GlobalMemoryStatusEx(&status)) return 0;
     return (int)(status.ullAvailPhys / (1024 * 1024));
+#else
+    // MemAvailable is the kernel's estimate of memory a new workload can use
+    // without swapping; plain MemFree under-reports on Linux.
+    FILE* file = std::fopen("/proc/meminfo", "r");
+    if (!file) return 0;
+    char line[256];
+    int free_mb = 0;
+    while (std::fgets(line, sizeof(line), file)) {
+        unsigned long long kb = 0;
+        if (std::sscanf(line, "MemAvailable: %llu kB", &kb) == 1) {
+            free_mb = (int)(kb / 1024);
+            break;
+        }
+    }
+    std::fclose(file);
+    return free_mb;
+#endif
 }
 
 double plm_benchmark_bandwidth(void) {

@@ -116,14 +116,15 @@ class SettingsView extends GetView<SettingsController> {
               if (Get.isRegistered<ClusterService>())
                 AppRow(
                   icon: Icons.hub_outlined,
-                  title: 'Phone cluster',
+                  title: 'AI cluster',
                   trailing: Text(
                       switch (Get.find<ClusterService>().role) {
                         ClusterRole.master => 'Master',
                         ClusterRole.worker => 'Worker',
                         ClusterRole.off => 'Off',
                       },
-                      style: AppTokens.of(context).caption.copyWith(fontSize: 14)),
+                      style:
+                          AppTokens.of(context).caption.copyWith(fontSize: 14)),
                   chevron: true,
                   onTap: () => Get.to(() => const ClusterView()),
                 ),

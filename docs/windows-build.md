@@ -9,7 +9,7 @@ cluster worker, the master side, which spreads a model across phone workers,
 the platform guards that keep mobile-only features from breaking on Windows,
 opt-in Vulkan/GPU inference, and the tests/packaging/docs baseline. Standalone
 Windows chat with a GGUF model works through the C ABI in
-`local_plugins/llama_flutter_android/windows/include/llama_ffi.h`. See
+`local_plugins/llama_flutter_android/include/llama_ffi.h`. See
 [windows-port-plan.md](windows-port-plan.md) for the roadmap and
 [windows-cluster.md](windows-cluster.md) for cluster setup and troubleshooting.
 
@@ -214,7 +214,7 @@ the monitor work area so its frame never lands off-screen on small displays.
     GPU detection. Exact same code the Android JNI layer runs.
 - `android/src/main/cpp/jni_wrapper.cpp` is now a thin JNI adapter; all JNI
   symbols and error messages are unchanged, so Android behavior is identical.
-- `windows/llama_ffi.cpp` + `include/llama_ffi.h` export the C ABI
+- `src/llama_ffi.cpp` + `include/llama_ffi.h` (shared with Linux) export the C ABI
   (`plm_load_model`, `plm_generate`, `plm_stop`, `plm_unload`, …) from
   `llama_flutter_android.dll`.
 - The Windows build compiles the plugin's llama.cpp tree statically
@@ -291,12 +291,13 @@ the monitor work area so its frame never lands off-screen on small displays.
   - plans loads through the plugin DLL (`plm_free_ram_mb`,
     `plm_benchmark_bandwidth`, `plm_set_cluster`, `plm_last_load_buffers`);
   - browses `_privatelm._tcp.local` with `multicast_dns` for "Find nearby".
-- `local_plugins/llama_flutter_android/windows/rpc_worker/`:
-  - `main.cpp` — arg parsing, CPU/RPC backend lookup, a pre-bind check so port
-    conflicts surface the real Winsock message, Ctrl+C handling, a
-    `--parent-pid` watchdog, and the 1 s status loop.
-  - `status_writer.cpp` — atomic JSON status (temp file + replace).
-  - `mdns_advertiser.cpp` — best-effort DNS-SD registration via
+- `local_plugins/llama_flutter_android/src/rpc_worker/` (shared with Linux):
+  - `main_common.cpp` — arg parsing, CPU/RPC backend lookup, the pre-bind
+    check, and the 1 s status loop.
+  - `main_win.cpp` — Winsock bind/probe, Ctrl+C handling and the
+    `--parent-pid` watchdog.
+  - `status_writer_win.cpp` — atomic JSON status (temp file + replace).
+  - `mdns_advertiser_win.cpp` — best-effort DNS-SD registration via
     `DnsServiceRegister` (no extra responder to ship).
   - The CMake target links the same static llama.cpp as the DLL, so the RPC
     protocol version (`rpc7`) matches every Android/iOS worker, and Flutter

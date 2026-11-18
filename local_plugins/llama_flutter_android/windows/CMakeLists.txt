@@ -116,13 +116,13 @@ add_subdirectory(
 # The plugin DLL: C ABI adapter (llama_ffi.cpp) over the shared engine core.
 # ---------------------------------------------------------------------------
 add_library(${PROJECT_NAME} SHARED
-  "llama_ffi.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/llama_ffi.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/plm_core.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/plm_engine.cpp"
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../include"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src"
   "${CMAKE_CURRENT_SOURCE_DIR}/../android/src/main/cpp/llama.cpp/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/../android/src/main/cpp/llama.cpp/ggml/include"
@@ -149,14 +149,16 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 # version matches every Android/iOS worker.
 # ---------------------------------------------------------------------------
 add_executable(privatelm_rpc_worker
-  "rpc_worker/main.cpp"
-  "rpc_worker/status_writer.cpp"
-  "rpc_worker/mdns_advertiser.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/rpc_worker/main_common.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/rpc_worker/main_win.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/rpc_worker/status_writer_win.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/rpc_worker/mdns_advertiser_win.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/plm_core.cpp"
 )
 
 target_include_directories(privatelm_rpc_worker PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/rpc_worker"
   "${CMAKE_CURRENT_SOURCE_DIR}/../android/src/main/cpp/llama.cpp/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/../android/src/main/cpp/llama.cpp/ggml/include"
 )

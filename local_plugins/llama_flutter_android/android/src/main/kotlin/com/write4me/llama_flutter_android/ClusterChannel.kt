@@ -74,6 +74,7 @@ class ClusterChannel(
                     .putExtra(ClusterWorkerService.EXTRA_PORT,
                         call.argument<Int>("port") ?: ClusterWorkerService.DEFAULT_PORT)
                     .putExtra(ClusterWorkerService.EXTRA_THREADS, call.argument<Int>("threads") ?: 0)
+                    .putExtra(ClusterWorkerService.EXTRA_HOST, call.argument<String>("host") ?: "")
                 ContextCompat.startForegroundService(context, intent)
                 result.success(null)
             }

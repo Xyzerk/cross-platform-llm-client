@@ -1,7 +1,8 @@
-// Windows C ABI for the llama engine core.
+// Desktop C ABI for the llama engine core.
 //
-// Exported from llama_flutter_android.dll. The Dart side (lib/src/
-// llama_host_ffi.dart, Phase 2) binds these with dart:ffi; each function is a
+// Exported from llama_flutter_android.dll (Windows) and
+// libllama_flutter_android.so (Linux). The Dart side (lib/src/
+// llama_host_ffi.dart) binds these with dart:ffi; each function is a
 // thin shim over the same plm::engine the Android JNI layer uses, so both
 // platforms run identical model lifecycle / generation / cluster logic.
 //

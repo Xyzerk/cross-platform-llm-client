@@ -33,11 +33,13 @@ abstract class ClusterBackend {
   /// Starts serving this device's CPU to a master.
   ///
   /// [advertiseIp] is the LAN address to put in mDNS advertisements; platforms
-  /// with their own service host may ignore it.
+  /// with their own service host may ignore it. [bindHost] restricts the RPC
+  /// listener to one interface (null listens on every interface).
   Future<void> startWorker({
     int port = defaultPort,
     int? threads,
     String? advertiseIp,
+    String? bindHost,
   });
 
   Future<void> stopWorker();

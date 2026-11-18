@@ -9,7 +9,13 @@ import 'chat_prompt_builder.dart';
 
 /// Whether the current platform supports local inference.
 bool get supportsLocalInference =>
-    Platform.isAndroid || Platform.isIOS || Platform.isWindows;
+    Platform.isAndroid ||
+    Platform.isIOS ||
+    Platform.isWindows ||
+    Platform.isLinux;
+
+/// Windows and Linux both run GGUF models through the desktop FFI engine.
+bool get isDesktopLocalInference => Platform.isWindows || Platform.isLinux;
 
 /// True when the app runs as a 32-bit Android process (32-bit Android, e.g.
 /// Android Go phones). LiteRT ships 64-bit only, and the address space limits
@@ -38,7 +44,8 @@ class LoadResult {
   });
 }
 
-/// Android, iOS & Windows inference engine — wraps llama_flutter_android.
+/// Android, iOS & desktop (Windows/Linux) inference engine — wraps
+/// llama_flutter_android.
 class InferenceEngine {
   LlamaController? _controller;
   LiteLmEngine? _liteEngine;
@@ -77,14 +84,14 @@ class InferenceEngine {
     _disposed = false;
     final runtime = _runtimeFor(modelPath, modelRuntime);
 
-    // Windows has no LiteRT-LM or Stable Diffusion runtime yet. Reject those
-    // model types up front with a clear message instead of failing inside a
-    // native loader that isn't there.
-    if (Platform.isWindows) {
+    // Windows and Linux have no LiteRT-LM or Stable Diffusion runtime yet.
+    // Reject those model types up front with a clear message instead of
+    // failing inside a native loader that isn't there.
+    if (isDesktopLocalInference) {
       if (runtime == 'litert') {
         return LoadResult(
           success: false,
-          message: 'LiteRT-LM models (.litertlm) are not supported on Windows '
+          message: 'LiteRT-LM models (.litertlm) are not supported on desktop '
               'yet. Use a GGUF model instead.',
         );
       }
@@ -92,7 +99,7 @@ class InferenceEngine {
         return LoadResult(
           success: false,
           message: 'Local image generation models (.safetensors) are not '
-              'supported on Windows yet. Use Cloud image generation instead.',
+              'supported on desktop yet. Use Cloud image generation instead.',
         );
       }
     }
@@ -166,7 +173,7 @@ class InferenceEngine {
 
     // ── Thread Tuning ──
     int threads;
-    if (Platform.isWindows) {
+    if (isDesktopLocalInference) {
       // Desktop CPUs have many logical cores; cap the count so llama.cpp is
       // not oversubscribed by SMT siblings / the UI thread.
       threads = math.max(1, math.min(Platform.numberOfProcessors, 16));
@@ -190,7 +197,7 @@ class InferenceEngine {
     // that corrupt logits at >1 thread on Gemma models. Force single-threaded
     // to eliminate KV cache races in the quantization dot-product path.
     final modelName = modelPath.toLowerCase();
-    if (!Platform.isWindows && isTensorSoC && modelName.contains('gemma')) {
+    if (!isDesktopLocalInference && isTensorSoC && modelName.contains('gemma')) {
       threads = 1;
       print(
           '[Inference] Tensor SoC + Gemma detected — forcing single-threaded inference');
