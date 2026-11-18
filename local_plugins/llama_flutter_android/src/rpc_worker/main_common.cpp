@@ -1,4 +1,4 @@
-// privatelm_rpc_worker.exe — the Windows half of a phone/PC cluster.
+// privatelm_rpc_worker — the desktop half of a PrivateLM cluster.
 //
 // Runs llama.cpp's RPC server over this machine's CPU, the same protocol the
 // Android ":cluster" process serves. It lives in its own executable because
@@ -8,10 +8,9 @@
 // The app polls the JSON status file written by status_writer.cpp, so this
 // process never needs a Dart isolate or a method channel. Manual IP / QR
 // pairing is the guaranteed path; mDNS is a best-effort convenience.
-#include <winsock2.h>
-#include <windows.h>
-#include <ws2tcpip.h>
-
+//
+// This file is the platform-neutral core; main_win.cpp and main_posix.cpp add
+// the sockets, signal handling and parent watchdog.
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -20,12 +19,12 @@
 #include <cstring>
 #include <string>
 #include <thread>
-#include <vector>
 
 #include "ggml-backend.h"
 #include "llama.h"
 #include "mdns_advertiser.h"
 #include "plm_core.h"
+#include "platform.h"
 #include "status_writer.h"
 
 namespace {
@@ -37,55 +36,10 @@ struct Args {
     std::string cache_dir;
     std::string status_file;
     std::string id;
-    std::string model = "Windows PC";
+    std::string model;
     std::string advertise_ip;
-    DWORD parent_pid = 0;
+    unsigned long long parent_pid = 0;
 };
-
-std::string narrow(const std::wstring& text) {
-    if (text.empty()) return {};
-    const int len = WideCharToMultiByte(CP_UTF8, 0, text.c_str(),
-                                        static_cast<int>(text.size()), nullptr, 0,
-                                        nullptr, nullptr);
-    if (len <= 0) return {};
-    std::string out(static_cast<size_t>(len), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, text.c_str(),
-                        static_cast<int>(text.size()), out.data(), len, nullptr,
-                        nullptr);
-    return out;
-}
-
-std::wstring widen(const std::string& text) {
-    if (text.empty()) return {};
-    const int len = MultiByteToWideChar(CP_UTF8, 0, text.c_str(),
-                                        static_cast<int>(text.size()), nullptr, 0);
-    if (len <= 0) return {};
-    std::wstring out(static_cast<size_t>(len), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
-                        out.data(), len);
-    return out;
-}
-
-std::string systemError(DWORD code) {
-    wchar_t* buffer = nullptr;
-    const DWORD len = FormatMessageW(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-            FORMAT_MESSAGE_IGNORE_INSERTS,
-        nullptr, code, 0, reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
-    std::string text = len && buffer ? narrow(buffer) : std::string("error");
-    if (buffer) LocalFree(buffer);
-    while (!text.empty() && (text.back() == '\r' || text.back() == '\n')) {
-        text.pop_back();
-    }
-    return text + " (" + std::to_string(code) + ")";
-}
-
-std::string hostName() {
-    wchar_t buffer[MAX_COMPUTERNAME_LENGTH + 1] = {};
-    DWORD size = MAX_COMPUTERNAME_LENGTH + 1;
-    if (!GetComputerNameW(buffer, &size)) return "Windows PC";
-    return narrow(std::wstring(buffer, size));
-}
 
 void parseArgs(int argc, char** argv, Args& args) {
     for (int i = 1; i < argc; i++) {
@@ -114,86 +68,14 @@ void parseArgs(int argc, char** argv, Args& args) {
         } else if (flag == "--advertise-ip") {
             args.advertise_ip = next("--advertise-ip");
         } else if (flag == "--parent-pid") {
-            args.parent_pid =
-                static_cast<DWORD>(std::strtoul(next("--parent-pid").c_str(), nullptr, 10));
+            args.parent_pid = std::strtoull(next("--parent-pid").c_str(), nullptr, 10);
         }
-    }
-}
-
-/// Detached children have no stdio handles. Point them at NUL so llama.cpp's
-/// printf/fprintf calls never hit an invalid handle.
-void silenceMissingStdio() {
-    const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (out == nullptr || out == INVALID_HANDLE_VALUE) {
-        std::freopen("NUL", "w", stdout);
-    }
-    const HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
-    if (err == nullptr || err == INVALID_HANDLE_VALUE) {
-        std::freopen("NUL", "w", stderr);
     }
 }
 
 void stderrSink(ggml_log_level /* level */, const char* text) {
     if (!text) return;
     std::fputs(text, stderr);
-}
-
-/// Binds the port once before handing it to ggml. ggml_backend_rpc_start_server
-/// returns silently on a bind failure, so this is how we surface the OS error
-/// (firewall, another worker, port reserved).
-bool canBind(const std::string& host, int port, std::string& error) {
-    WSADATA wsa = {};
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        error = "Winsock could not start";
-        return false;
-    }
-
-    SOCKET socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (socket == INVALID_SOCKET) {
-        error = "Could not create a socket: " + systemError(WSAGetLastError());
-        WSACleanup();
-        return false;
-    }
-
-    sockaddr_in address = {};
-    address.sin_family = AF_INET;
-    address.sin_port = htons(static_cast<u_short>(port));
-    if (host.empty() || host == "0.0.0.0") {
-        address.sin_addr.s_addr = INADDR_ANY;
-    } else if (InetPtonA(AF_INET, host.c_str(), &address.sin_addr) != 1) {
-        error = "Invalid worker host: " + host;
-        closesocket(socket);
-        WSACleanup();
-        return false;
-    }
-
-    if (bind(socket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) ==
-        SOCKET_ERROR) {
-        error = "Port " + std::to_string(port) + " is not available: " +
-                systemError(WSAGetLastError());
-        closesocket(socket);
-        WSACleanup();
-        return false;
-    }
-    if (listen(socket, SOMAXCONN) == SOCKET_ERROR) {
-        error = "Could not listen on port " + std::to_string(port) + ": " +
-                systemError(WSAGetLastError());
-        closesocket(socket);
-        WSACleanup();
-        return false;
-    }
-
-    closesocket(socket);
-    WSACleanup();
-    return true;
-}
-
-BOOL WINAPI ctrlHandler(DWORD type) {
-    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT ||
-        type == CTRL_CLOSE_EVENT || type == CTRL_SHUTDOWN_EVENT) {
-        ExitProcess(0);
-    }
-    return FALSE;
 }
 
 worker::Status makeStatus(const Args& args, long long ram_mb, double bandwidth) {
@@ -207,8 +89,8 @@ worker::Status makeStatus(const Args& args, long long ram_mb, double bandwidth) 
 
 } // namespace
 
-int main(int argc, char** argv) {
-    silenceMissingStdio();
+int worker::runWorker(int argc, char** argv) {
+    worker::silenceMissingStdio();
 
     Args args;
     parseArgs(argc, argv, args);
@@ -260,34 +142,26 @@ int main(int argc, char** argv) {
     }
 
     std::string bind_error;
-    if (!canBind(args.host, args.port, bind_error)) {
-        return fail(bind_error +
-                        ". Allow PrivateLM through Windows Firewall, close other "
-                        "PrivateLM windows, or choose another port.",
-                    2);
+    if (!worker::canBind(args.host, args.port, bind_error)) {
+        return fail(bind_error + ". " + worker::bindHint(), 2);
     }
 
     const std::string endpoint = args.host + ":" + std::to_string(args.port);
-    const std::string model = args.model.empty() ? hostName() : args.model;
-    worker::startMdnsAdvertiser("PrivateLM " + model, hostName(), args.port,
+    const std::string model = args.model.empty() ? worker::hostName() : args.model;
+    worker::startMdnsAdvertiser("PrivateLM " + model, worker::hostName(), args.port,
                                 ram_mb, bandwidth, args.id, model,
                                 args.advertise_ip);
 
     // The parent (the Flutter app) owns this process: when it exits, close the
-    // RPC server with it. A Job Object in the app is the primary mechanism;
-    // this watchdog also covers launches that did not create one.
+    // RPC server with it. Windows uses a job object plus this watchdog; Linux
+    // sets PR_SET_PDEATHSIG and re-checks the parent here.
     if (args.parent_pid != 0) {
-        HANDLE parent = OpenProcess(SYNCHRONIZE, FALSE, args.parent_pid);
-        if (!parent) {
-            return fail("The app that started this worker is no longer running", 2);
+        std::string parent_error;
+        if (!worker::watchParent(args.parent_pid, parent_error)) {
+            return fail(parent_error, 2);
         }
-        std::thread([parent] {
-            WaitForSingleObject(parent, INFINITE);
-            CloseHandle(parent);
-            ExitProcess(0);
-        }).detach();
     }
-    SetConsoleCtrlHandler(ctrlHandler, TRUE);
+    worker::installShutdownHandlers();
 
     status.state = "running";
     worker::writeStatusFile(args.status_file, status);

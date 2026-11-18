@@ -1,11 +1,11 @@
 // Platform-neutral core extracted from jni_wrapper.cpp.
 //
 // Holds the process-global engine state and the cluster planning / memory
-// bandwidth helpers that both Android (JNI) and Windows (FFI) need. Keeping
-// these in one place avoids a third hand-synced copy (Android, iOS, Windows).
+// bandwidth helpers that Android (JNI) and desktop (FFI) need. Keeping
+// these in one place avoids a third hand-synced copy (Android, iOS, Windows, Linux).
 //
 // The JNI entry points in jni_wrapper.cpp (and the Windows C ABI in
-// windows/llama_ffi.cpp) are thin marshalling shims that delegate here.
+// desktop src/llama_ffi.cpp) are thin marshalling shims that delegate here.
 // Symbol names/signatures on the JNI side are unchanged.
 #pragma once
 
