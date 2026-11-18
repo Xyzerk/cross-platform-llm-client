@@ -56,6 +56,18 @@ sudo pacman -S --needed \
   clang cmake ninja pkgconf gtk3 glib2 xz xkbcommon base-devel
 ```
 
+Optional, for faster CPU inference (clang needs the LLVM runtime; the
+distribution `clang` package does not ship it):
+
+- Ubuntu / Debian / Mint: `libomp-18-dev` (match your clang major, or
+  `libomp-dev`)
+- Fedora: `libomp-devel`
+- Arch: `openmp`
+
+Without it the build succeeds with `CMake Warning ... OpenMP not found`
+and llama.cpp uses its std::thread backend: tokens still stream, but
+prompt processing is slower.
+
 Optional, only for GPU inference:
 
 - Vulkan loader and development headers (`libvulkan-dev` / `vulkan-devel`)
@@ -196,6 +208,12 @@ above. Flutter does not bundle a Linux C++ toolchain.
 
 **`gtk+-3.0` not found by `pkg-config`.** Install `libgtk-3-dev`
 (Ubuntu/Debian) or `gtk3-devel` (Fedora).
+
+**`CMake Warning ... OpenMP not found`.** Harmless, but CPU prompt processing
+is slower without it. Install the OpenMP runtime for your clang
+(`libomp-18-dev`, or `libomp-dev`) and remove the CMake cache
+(`rm -rf build/linux`) so `find_package(OpenMP)` runs again. Fedora:
+`libomp-devel`; Arch: `openmp`.
 
 **The build succeeds but the app reports the library is missing.** Check that
 `bundle/lib/libllama_flutter_android.so` exists. If it does not, the plugin's
