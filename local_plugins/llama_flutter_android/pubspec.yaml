@@ -31,3 +31,5 @@ flutter:
         pluginClass: LlamaFlutterAndroidPlugin
       windows:
         ffiPlugin: true
+      linux:
+        ffiPlugin: true
