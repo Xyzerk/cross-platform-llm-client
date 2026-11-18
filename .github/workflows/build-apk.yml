@@ -3,6 +3,9 @@ name: Build APK
 on:
   push:
     branches: [main]
+    # Tag pushes are what run the signed release job below; a branches-only
+    # filter would drop them entirely.
+    tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -22,6 +25,8 @@ env:
 jobs:
   debug-apk:
     name: Debug APK
+    # Tag pushes are handled by release-apk; skip the debug build for them.
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
