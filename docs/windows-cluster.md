@@ -1,7 +1,8 @@
 # PrivateLM Windows cluster
 
-A Windows PC can run a GGUF model together with Android/iOS phones on the same
-Wi-Fi. Either side can be the master:
+A Windows PC can run a GGUF model together with Android/iOS phones and other
+PCs on the same Wi-Fi, over a USB cable with `adb`, through USB tethering, or
+over an opt-in Tailscale tailnet. Either side can be the master:
 
 | Master        | Workers                          | Status |
 |---------------|----------------------------------|--------|
@@ -16,6 +17,7 @@ more than raw phone speed.
 > **Trusted LAN only.** llama.cpp's RPC protocol has **no authentication**. A
 > worker exposes its CPU and memory to anyone who can reach TCP port `50052`.
 > Do not run cluster mode on public Wi-Fi, and never port-forward `50052`.
+> The same applies to a tailnet: restrict `tcp:50052` with ACLs.
 
 ## Windows as a worker
 
@@ -34,8 +36,9 @@ probe, so a stale file is not treated as a running worker after six seconds.
 
 ## Windows as a master
 
-1. Add workers by QR code, by pasting a `privatelm://worker?...` link, or by
-   typing `IP:port`.
+1. Add workers by QR code, by pasting a `privatelm://worker?...` link, by
+   typing `IP:port`, with **Add over USB** for a cabled phone, or with
+   **Find Tailscale** for a peer on the tailnet.
 2. Turn the role to **Master**. The choice is saved as `cluster_enabled`.
 3. Load a GGUF model. The app asks each worker for its free RAM and memory
    bandwidth, then either fills the fastest devices first (model does not fit
@@ -71,7 +74,7 @@ instead of a generic failure.
 ## Choosing an interface
 
 A PC usually has several IPv4 addresses (Wi-Fi, Ethernet, Hyper-V, WSL,
-VirtualBox, Tailscale). The cluster screen lists the physical ones first and
+VirtualBox). The cluster screen lists the physical ones first and
 skips known virtual adapters. If the wrong one was picked, choose another; the
 choice is saved as `cluster_interface` and advertised through mDNS.
 

@@ -14,7 +14,8 @@ _Generated on pixel 6 with 20 step_
 
 ## What It Does
 
-- **Local Inference on Android** — Download and run GGUF models directly on your phone using GPU-accelerated inference (Vulkan). No internet required after download.
+- **Local Inference on Android, Windows and Linux** — Run GGUF models directly on the device (Vulkan where enabled). No internet required after download.
+- **AI cluster** — Spread one GGUF model across phones and PCs on the same LAN, over a USB cable with `adb`, through USB tethering, or over an opt-in Tailscale tailnet.
 - **Cloud API Fallback** — Seamlessly switch to OpenAI, Anthropic, Google Gemini, or Kimi (Moonshot AI) when you need more power or are on unsupported platforms.
 - **Multimodal Chat** — Send text and images in conversations. Vision support works with both local models (Qwen2-VL) and cloud providers.
 - **Persistent Sessions** — All chats and settings are stored locally via Hive. Nothing leaves your device unless you explicitly choose cloud mode.
@@ -91,8 +92,12 @@ API keys are stored in Hive and never transmitted anywhere except to the provide
 Local inference is conditionally compiled:
 
 - **Android** → `inference_android.dart` (full llama.cpp engine)
-- **Web** → `inference_stub.dart` (cloud-only, local coming soon)
 - **iOS** → `inference_android.dart` (full llama.cpp engine via Metal GPU)
+- **Windows / Linux** → `inference_android.dart` + `llama_host_ffi.dart`
+  (in-process GGUF engine through the plugin's C ABI; CPU default, Vulkan
+  opt-in). Desktop builds can be an AI cluster master or worker, and bridge a
+  phone over USB with `adb`.
+- **Web** → `inference_stub.dart` (cloud-only, local coming soon)
 
 The `InferenceService` exposes `supportsLocalInference` so the UI can hide local-model UI on unsupported platforms.
 
@@ -104,6 +109,8 @@ The `InferenceService` exposes `supportsLocalInference` so the UI can hide local
 | -------- | --------------- | ---------- | ------------------------------- |
 | Android  | ✅ Yes          | ✅ Yes     | CPU offload via NEON; minSdk 28 |
 | iOS      | ✅ Yes          | ✅ Yes     | Metal GPU acceleration          |
+| Windows  | ✅ Yes          | ✅ Yes     | GGUF only; opt-in Vulkan        |
+| Linux    | ✅ Yes          | ✅ Yes     | GGUF only; CPU default, opt-in Vulkan; cluster master/worker; USB adb and Tailscale |
 | Web      | ❌ No           | ✅ Yes     | Cloud-only (local coming soon)  |
 
 ### iOS / iPad (Installation via AltServer)
@@ -174,6 +181,23 @@ flutter build ios
 flutter pub get
 flutter build web --release
 ```
+
+### Windows and Linux (local GGUF inference)
+
+```bash
+# Windows (from PowerShell; add -Vulkan for GPU inference)
+powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1 -Mode release
+
+# Linux (add --vulkan for GPU inference)
+scripts/build_linux.sh --release
+```
+
+See [docs/windows-build.md](docs/windows-build.md) and
+[docs/linux-build.md](docs/linux-build.md) for the native prerequisites
+(Visual Studio C++ workload / GTK 3 development headers), troubleshooting and
+the bundle layout. [docs/ai-cluster.md](docs/ai-cluster.md) covers sharing a
+model across Linux, Windows, Android and iOS devices on a LAN, over USB, or
+over Tailscale; [docs/usb-adb.md](docs/usb-adb.md) covers the cable bridge.
 
 ---
 
